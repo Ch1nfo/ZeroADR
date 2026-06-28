@@ -71,7 +71,7 @@ class PromptInjectionDetector:
 
 def extract_result_text(value: Any) -> str:
     parts: list[str] = []
-    _collect_text(value, parts)
+    _collect_text(value, parts, depth=0)
     return "\n".join(parts)
 
 
@@ -90,14 +90,18 @@ def classify_prompt_injection(text: str) -> tuple[Severity, str] | None:
     return None
 
 
-def _collect_text(value: Any, parts: list[str]) -> None:
+def _collect_text(value: Any, parts: list[str], depth: int) -> None:
+    # Limit recursion depth to prevent stack overflow from malicious nested structures
+    if depth > 100:
+        return
+
     if isinstance(value, str):
         parts.append(value)
         return
     if isinstance(value, list):
         for item in value:
-            _collect_text(item, parts)
+            _collect_text(item, parts, depth + 1)
         return
     if isinstance(value, dict):
         for item in value.values():
-            _collect_text(item, parts)
+            _collect_text(item, parts, depth + 1)

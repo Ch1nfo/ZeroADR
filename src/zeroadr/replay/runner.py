@@ -5,6 +5,7 @@ from pathlib import Path
 
 from zeroadr.core.events import RuntimeEvent
 from zeroadr.core.trace import SessionTrace
+from zeroadr.detection.code_injection import CodeInjectionDetector
 from zeroadr.detection.engine import DetectionEngine
 from zeroadr.detection.exfiltration import ExternalDataExfiltrationDetector
 from zeroadr.detection.injection_chain import InjectionChainDetector
@@ -56,7 +57,17 @@ def replay_trace(path: Path, policy_engine: PolicyEngine | None = None) -> Sessi
         for finding in exfil_findings
     ]
     findings.extend(exfil_findings)
-    for finding in [*chain_findings, *exfil_findings]:
+    code_injection_findings = CodeInjectionDetector().detect(events, findings)
+    code_injection_findings = [
+        finding.model_copy(
+            update={
+                "finding_id": f"finding_code_inj_{finding.event_ids[0]}_{finding.event_ids[1] if len(finding.event_ids) > 1 else 'single'}"
+            }
+        )
+        for finding in code_injection_findings
+    ]
+    findings.extend(code_injection_findings)
+    for finding in [*chain_findings, *exfil_findings, *code_injection_findings]:
         decision = policy.evaluate_finding(finding)
         decisions.append(
             decision.model_copy(

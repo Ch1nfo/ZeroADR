@@ -110,6 +110,21 @@ class GatewayRuntime:
         if message.get("method") != "tools/call":
             return ClientInspectionResult()
         request_id = message.get("id")
+
+        # Validate request_id type - must be string or int per JSON-RPC spec
+        if request_id is not None and not isinstance(request_id, (str, int)):
+            # Invalid request_id type - block with error
+            error_response = {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {
+                    "code": -32600,
+                    "message": "Invalid Request",
+                    "data": {"reason": "request id must be a string, number, or null"},
+                },
+            }
+            return ClientInspectionResult(block_response=error_response)
+
         params_obj = message.get("params")
         params: dict[str, Any] = params_obj if isinstance(params_obj, dict) else {}
         tool_name_obj = params.get("name")
@@ -138,11 +153,11 @@ class GatewayRuntime:
             approval_id = result.approval_request.approval_id if result.approval_request else None
             pending = (
                 PendingCall(request_id, tool_name, arguments, event)
-                if isinstance(request_id, str | int)
+                if isinstance(request_id, (str, int))
                 else None
             )
             return ClientInspectionResult(approval_id=approval_id, pending=pending)
-        pending = PendingCall(request_id, tool_name, arguments, event) if isinstance(request_id, str | int) else None
+        pending = PendingCall(request_id, tool_name, arguments, event) if isinstance(request_id, (str, int)) else None
         if pending is not None:
             self.pending[pending.request_id] = pending
         return ClientInspectionResult(pending=pending)
@@ -532,28 +547,40 @@ async def run_stdio_proxy(
     response_slot_released = asyncio.Event()
 
     async def flush_ordered_responses() -> None:
-        async with output_lock:
-            while response_order:
+        # Process responses without holding the lock while waiting
+        while True:
+            request_id = None
+            response_to_write = None
+
+            async with output_lock:
+                if not response_order:
+                    return
+
                 request_id = response_order[0]
                 if request_id in blocked_responses:
-                    response = blocked_responses.pop(request_id)
-                    sys.stdout.buffer.write(response)
-                    sys.stdout.buffer.flush()
-                    response_order.pop(0)
-                    response_slot_released.set()
+                    response_to_write = blocked_responses.pop(request_id)
+                elif request_id in server_responses:
+                    response_to_write = server_responses.pop(request_id)
+                else:
+                    # Response not ready yet, exit without holding lock
+                    return
+
+                # Remove from order now that we have the response
+                response_order.pop(0)
+
+            # Write response outside the lock
+            if response_to_write is not None:
+                sys.stdout.buffer.write(response_to_write)
+                sys.stdout.buffer.flush()
+                response_slot_released.set()
+
+                # Check if all responses are drained
+                async with output_lock:
                     if not response_order:
                         responses_drained.set()
-                    continue
-                if request_id in server_responses:
-                    line = server_responses.pop(request_id)
-                    sys.stdout.buffer.write(line)
-                    sys.stdout.buffer.flush()
-                    response_order.pop(0)
-                    response_slot_released.set()
-                    if not response_order:
-                        responses_drained.set()
-                    continue
-                return
+
+            # Continue to next response
+            await asyncio.sleep(0)
 
     async def client_to_server() -> None:
         while True:
@@ -803,65 +830,81 @@ def encode_framed_response(message: dict[str, Any], framing: Literal["line", "mc
 
 
 def read_framed_message(stream: Any) -> FramedMessage | None:
-    first_line = stream.readline()
-    if not first_line:
-        return None
-    if first_line.lower().startswith(b"content-length:"):
-        headers = [first_line]
-        content_length = _parse_content_length(first_line)
-        while True:
-            header_line = stream.readline()
-            if not header_line:
-                return None
-            headers.append(header_line)
-            if header_line in {b"\r\n", b"\n"}:
-                break
-            if header_line.lower().startswith(b"content-length:"):
-                content_length = _parse_content_length(header_line)
-        if content_length is None:
-            raise ValueError("MCP frame missing Content-Length header")
-        body = stream.read(content_length)
-        if len(body) != content_length:
+    """Read a framed message from stream. Returns None on EOF or protocol errors."""
+    try:
+        first_line = stream.readline()
+        if not first_line:
             return None
-        raw = b"".join(headers) + body
-        message = json.loads(body.decode("utf-8"))
+        if first_line.lower().startswith(b"content-length:"):
+            headers = [first_line]
+            content_length = _parse_content_length(first_line)
+            while True:
+                header_line = stream.readline()
+                if not header_line:
+                    return None
+                headers.append(header_line)
+                if header_line in {b"\r\n", b"\n"}:
+                    break
+                if header_line.lower().startswith(b"content-length:"):
+                    content_length = _parse_content_length(header_line)
+            if content_length is None:
+                # Missing Content-Length header - protocol error
+                return None
+            body = stream.read(content_length)
+            if len(body) != content_length:
+                return None
+            raw = b"".join(headers) + body
+            message = json.loads(body.decode("utf-8"))
+            if not isinstance(message, dict):
+                # Invalid JSON-RPC message format
+                return None
+            return FramedMessage(message=message, raw=raw, framing="mcp")
+        message = json.loads(first_line.decode("utf-8"))
         if not isinstance(message, dict):
-            raise ValueError("JSON-RPC message must be an object")
-        return FramedMessage(message=message, raw=raw, framing="mcp")
-    message = json.loads(first_line.decode("utf-8"))
-    if not isinstance(message, dict):
-        raise ValueError("JSON-RPC message must be an object")
-    return FramedMessage(message=message, raw=first_line, framing="line")
+            # Invalid JSON-RPC message format
+            return None
+        return FramedMessage(message=message, raw=first_line, framing="line")
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        # Protocol errors: return None instead of raising
+        return None
 
 
 async def read_async_framed_message(stream: asyncio.StreamReader) -> FramedMessage | None:
-    first_line = await stream.readline()
-    if not first_line:
-        return None
-    if first_line.lower().startswith(b"content-length:"):
-        headers = [first_line]
-        content_length = _parse_content_length(first_line)
-        while True:
-            header_line = await stream.readline()
-            if not header_line:
+    """Read a framed message from async stream. Returns None on EOF or protocol errors."""
+    try:
+        first_line = await stream.readline()
+        if not first_line:
+            return None
+        if first_line.lower().startswith(b"content-length:"):
+            headers = [first_line]
+            content_length = _parse_content_length(first_line)
+            while True:
+                header_line = await stream.readline()
+                if not header_line:
+                    return None
+                headers.append(header_line)
+                if header_line in {b"\r\n", b"\n"}:
+                    break
+                if header_line.lower().startswith(b"content-length:"):
+                    content_length = _parse_content_length(header_line)
+            if content_length is None:
+                # Missing Content-Length header - protocol error
                 return None
-            headers.append(header_line)
-            if header_line in {b"\r\n", b"\n"}:
-                break
-            if header_line.lower().startswith(b"content-length:"):
-                content_length = _parse_content_length(header_line)
-        if content_length is None:
-            raise ValueError("MCP frame missing Content-Length header")
-        body = await stream.readexactly(content_length)
-        raw = b"".join(headers) + body
-        message = json.loads(body.decode("utf-8"))
+            body = await stream.readexactly(content_length)
+            raw = b"".join(headers) + body
+            message = json.loads(body.decode("utf-8"))
+            if not isinstance(message, dict):
+                # Invalid JSON-RPC message format
+                return None
+            return FramedMessage(message=message, raw=raw, framing="mcp")
+        message = json.loads(first_line.decode("utf-8"))
         if not isinstance(message, dict):
-            raise ValueError("JSON-RPC message must be an object")
-        return FramedMessage(message=message, raw=raw, framing="mcp")
-    message = json.loads(first_line.decode("utf-8"))
-    if not isinstance(message, dict):
-        raise ValueError("JSON-RPC message must be an object")
-    return FramedMessage(message=message, raw=first_line, framing="line")
+            # Invalid JSON-RPC message format
+            return None
+        return FramedMessage(message=message, raw=first_line, framing="line")
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, asyncio.IncompleteReadError):
+        # Protocol errors: return None instead of raising
+        return None
 
 
 def _parse_content_length(header_line: bytes) -> int | None:

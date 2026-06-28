@@ -24,6 +24,17 @@ _ASSET_TYPES = {
 
 def get_console_asset(asset_name: str) -> ConsoleAsset:
     name = "console.html" if asset_name in {"", "console.html"} else asset_name
+
+    # Validate asset name to prevent path traversal
+    if (
+        ".." in name
+        or "/" in name
+        or "\\" in name
+        or name.startswith(".")
+        or not name
+    ):
+        raise ConsoleAssetNotFound(name)
+
     if name not in _ASSET_TYPES:
         raise ConsoleAssetNotFound(name)
     body = resources.files("zeroadr.api.static").joinpath(name).read_bytes()

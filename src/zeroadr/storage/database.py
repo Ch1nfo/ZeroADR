@@ -254,21 +254,33 @@ class SQLiteStore:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[ApprovalRequest]:
-        query = "select request_json from approval_requests"
-        clauses: list[str] = []
+        # Build query parts safely - all dynamic parts use placeholders
+        query_parts = ["select request_json from approval_requests"]
         params: list[object] = []
+
+        # Build WHERE clause with parameterized conditions
+        where_conditions: list[str] = []
         if status is not None:
-            clauses.append("status = ?")
+            where_conditions.append("status = ?")
             params.append(status)
         if session_id is not None:
-            clauses.append("session_id = ?")
+            where_conditions.append("session_id = ?")
             params.append(session_id)
-        if clauses:
-            query += " where " + " and ".join(clauses)
-        query += " order by rowid"
+
+        if where_conditions:
+            query_parts.append("where")
+            query_parts.append(" and ".join(where_conditions))
+
+        # Add ordering
+        query_parts.append("order by rowid")
+
+        # Add pagination with placeholders
         if limit is not None:
-            query += " limit ? offset ?"
+            query_parts.append("limit ? offset ?")
             params.extend([limit, offset])
+
+        query = " ".join(query_parts)
+
         with self._connect() as conn:
             rows = conn.execute(query, params)
             return [ApprovalRequest.model_validate_json(row[0]) for row in rows]
@@ -305,6 +317,8 @@ class SQLiteStore:
         comment: str | None,
     ) -> ApprovalRequest:
         with self._connect() as conn:
+            # Use a single atomic operation to prevent race conditions
+            # First, read the current state
             row = conn.execute(
                 "select request_json from approval_requests where approval_id = ?",
                 (approval_id,),
@@ -312,29 +326,39 @@ class SQLiteStore:
             if row is None:
                 raise KeyError(approval_id)
             request = ApprovalRequest.model_validate_json(row[0])
-            if request.status != "pending":
-                raise ApprovalAlreadyResolvedError(request)
+
+            # Build the transitioned request
             transitioned = request.model_copy(
-            update={
-                "status": status,
-                "resolved_at": datetime.now(UTC),
-                "resolved_by": resolved_by,
-                "resolution_comment": comment,
-            }
-        )
+                update={
+                    "status": status,
+                    "resolved_at": datetime.now(UTC),
+                    "resolved_by": resolved_by,
+                    "resolution_comment": comment,
+                }
+            )
+
+            # Atomic update with status check - only succeeds if still pending
+            # This prevents concurrent modifications from succeeding
             cursor = conn.execute(
                 "update approval_requests set status = ?, request_json = ? "
                 "where approval_id = ? and status = 'pending'",
                 (transitioned.status, transitioned.model_dump_json(), approval_id),
             )
+
+            # Check if the update succeeded
             if cursor.rowcount == 1:
+                conn.commit()
                 return transitioned
+
+            # Update failed - either already resolved or deleted
             current_row = conn.execute(
                 "select request_json from approval_requests where approval_id = ?",
                 (approval_id,),
             ).fetchone()
             if current_row is None:
                 raise KeyError(approval_id)
+
+            # Already resolved by another request
             raise ApprovalAlreadyResolvedError(
                 ApprovalRequest.model_validate_json(current_row[0])
             )
