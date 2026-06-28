@@ -2,7 +2,7 @@
 
 # ZeroADR
 
-### 本地优先的 Agent 运行时安全平台
+### Agent 运行时检测、响应与策略控制平台
 
 [![版本](https://img.shields.io/badge/version-1.0.0rc1-blue.svg)](#)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)

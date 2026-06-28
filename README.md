@@ -2,7 +2,7 @@
 
 # ZeroADR
 
-### Local-First Agent Runtime Security Platform
+### Agent Runtime Detection, Response, and Policy Enforcement
 
 [![Version](https://img.shields.io/badge/version-1.0.0rc1-blue.svg)](#)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
