@@ -20,14 +20,43 @@ class LLMAdjudicationPolicy(BaseModel):
     false_positive_action: PolicyAction = "alert"
 
 
+class ToolResultGatePolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["shadow", "enforce"] = "shadow"
+    review: Literal["rules", "hybrid"] = "rules"
+    min_confidence: float = Field(default=0.85, ge=0.0, le=1.0)
+    true_positive_action: PolicyAction = "block"
+    false_positive_action: PolicyAction = "allow"
+    max_pending_responses: int = Field(default=256, gt=0)
+    max_buffer_bytes: int = Field(default=32 * 1024 * 1024, gt=0)
+
+
 class PolicyEngine:
-    def __init__(self, *, mode: str = "audit", policies: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        mode: str = "audit",
+        policies: list[dict[str, Any]] | None = None,
+        tool_result_gate: ToolResultGatePolicy | None = None,
+    ) -> None:
         self.mode = mode
         self.policies = policies or []
+        self.tool_result_gate = tool_result_gate
 
     @classmethod
     def from_dict(cls, config: dict[str, Any]) -> "PolicyEngine":
-        return cls(mode=str(config.get("mode", "audit")), policies=list(config.get("policies", [])))
+        gate_config = config.get("tool_result_gate")
+        gate = (
+            ToolResultGatePolicy.model_validate(gate_config)
+            if gate_config is not None
+            else None
+        )
+        return cls(
+            mode=str(config.get("mode", "audit")),
+            policies=list(config.get("policies", [])),
+            tool_result_gate=gate,
+        )
 
     @classmethod
     def from_file(cls, path: Path) -> "PolicyEngine":

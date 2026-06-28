@@ -59,5 +59,25 @@ When policy returns `block`, ZeroADR returns a valid JSON-RPC error:
 }
 ```
 
-`require_approval` is recorded and returned by hook decisions. The v0.1 MCP
-stdio proxy does not implement an interactive approval flow.
+`require_approval` is persisted and can pause MCP requests or successful MCP
+results until approved, denied, or expired.
+
+## MCP Tool Result Gate
+
+The top-level `tool_result_gate` mapping enables response-time enforcement:
+
+```yaml
+tool_result_gate:
+  mode: shadow
+  review: rules
+  min_confidence: 0.85
+  true_positive_action: block
+  false_positive_action: allow
+  max_pending_responses: 256
+  max_buffer_bytes: 33554432
+```
+
+If this mapping is absent, MCP responses retain record-only behavior. Shadow
+mode records decisions without changing wire responses. Enforce mode can block
+or hold the original response for approval. Hybrid review uses bounded,
+redacted evidence and fails safely to approval.

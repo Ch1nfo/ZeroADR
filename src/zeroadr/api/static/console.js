@@ -107,6 +107,8 @@ const translations = {
     approvalsViewInbox: "查看审批",
     approvalsResolveError: "审批操作失败",
     approvalsHint: "这是本地 localhost 审批 baseline。请在 hook client 中使用 approval_id 调用 wait-approval。",
+    approvalsStage: "阶段",
+    toolResultWarning: "警告：批准后会将原始、不受信任的工具结果返回给 Agent。",
     llmSettingsButton: "大模型设置",
     llmSettingsEyebrow: "模型服务",
     llmSettingsTitle: "大模型设置",
@@ -264,6 +266,8 @@ const translations = {
     approvalsViewInbox: "View approval",
     approvalsResolveError: "Approval action failed",
     approvalsHint: "This is a localhost approval baseline. Hook clients should call wait-approval with approval_id.",
+    approvalsStage: "Stage",
+    toolResultWarning: "Warning: approval returns the original untrusted tool result to the Agent.",
     llmSettingsButton: "LLM Settings",
     llmSettingsEyebrow: "Model Service",
     llmSettingsTitle: "LLM Settings",
@@ -328,6 +332,7 @@ const state = {
   selectedFindings: [],
   selectedDecisions: [],
   selectedAdjudications: [],
+  selectedToolResultGates: [],
   selectedFindingId: null,
   selectedEventId: null,
   capabilityFilter: "all",
@@ -671,6 +676,10 @@ async function loadSessionAdjudications(sessionId) {
   return fetchJson(`/api/v0/sessions/${encodeURIComponent(sessionId)}/adjudications`);
 }
 
+async function loadSessionToolResultGates(sessionId) {
+  return fetchJson(`/api/v0/sessions/${encodeURIComponent(sessionId)}/tool-result-gates`);
+}
+
 async function loadFindingEvidence(sessionId, findingId) {
   const encodedSession = encodeURIComponent(sessionId);
   const encodedFinding = encodeURIComponent(findingId);
@@ -802,13 +811,19 @@ function renderApprovals() {
     .map((entry) => {
       const approval = entry.approval || {};
       const args = approval.arguments ? JSON.stringify(approval.arguments) : "-";
+      const preview = approval.result_preview ? JSON.stringify(approval.result_preview) : "-";
+      const resultWarning = approval.stage === "tool_result"
+        ? `<strong class="risk-high">${escapeHtml(t("toolResultWarning"))}</strong><pre class="code-panel compact-code">${escapeHtml(preview)}</pre>`
+        : "";
       return `
         <article class="approval-card" data-approval-id="${escapeHtml(approval.approval_id)}">
           <strong>${escapeHtml(approval.tool_name || "-")} · ${escapeHtml(approval.capability || "-")}</strong>
           <span class="meta">${escapeHtml(t("approvalsSession"))}: ${escapeHtml(approval.session_id || "-")}</span>
           <span class="meta">${escapeHtml(t("approvalsReason"))}: ${escapeHtml(approval.reason || "-")}</span>
+          <span class="meta">${escapeHtml(t("approvalsStage"))}: ${escapeHtml(approval.stage || "pre_tool")}</span>
           <span class="meta">${escapeHtml(t("approvalsCreated"))}: ${escapeHtml(String(approval.created_at || "-"))}</span>
           <pre class="code-panel compact-code">${escapeHtml(args)}</pre>
+          ${resultWarning}
           <div class="approval-actions">
             <button type="button" class="approve-button" data-approval-id="${escapeHtml(approval.approval_id)}" data-resolve="approved">${escapeHtml(t("approvalsApprove"))}</button>
             <button type="button" class="deny-button" data-approval-id="${escapeHtml(approval.approval_id)}" data-resolve="denied">${escapeHtml(t("approvalsDeny"))}</button>
@@ -844,7 +859,7 @@ async function selectSession(sessionId) {
   renderSessions();
   elements.sessionDetail.innerHTML = `<div class="empty-state">${escapeHtml(t("loadingDetail"))}</div>`;
   try {
-    const [detail, full, evidence, events, findings, decisions, adjudications] = await Promise.all([
+    const [detail, full, evidence, events, findings, decisions, adjudications, toolResultGates] = await Promise.all([
       loadSessionDetail(sessionId),
       loadSessionFull(sessionId),
       loadSessionEvidence(sessionId),
@@ -852,6 +867,7 @@ async function selectSession(sessionId) {
       loadSessionFindings(sessionId),
       loadSessionDecisions(sessionId),
       loadSessionAdjudications(sessionId),
+      loadSessionToolResultGates(sessionId),
     ]);
     state.selectedDetail = detail;
     state.selectedFull = full;
@@ -860,6 +876,7 @@ async function selectSession(sessionId) {
     state.selectedFindings = findings.findings || [];
     state.selectedDecisions = decisions.policy_decisions || [];
     state.selectedAdjudications = adjudications.llm_adjudications || [];
+    state.selectedToolResultGates = toolResultGates.tool_result_gates || [];
     state.selectedFindingId = null;
     state.selectedEventId = null;
     state.capabilityFilter = "all";
@@ -955,6 +972,7 @@ function renderSessionDetail(payload, fullPayload, evidencePayload) {
   renderLLMAdjudications(
     fragment.getElementById("llm-adjudication-history"),
     state.selectedAdjudications || [],
+    state.selectedToolResultGates || [],
   );
   renderBom(fragment.getElementById("bom-panel"), fullPayload.agent_bom || {});
   renderInventory(fragment.getElementById("inventory"), payload.inventory || {});
@@ -1079,12 +1097,16 @@ function renderTimeline(target, timeline) {
       const targetValue = event.target || event.requested?.target || event.requested?.path || "";
       const decisionAction = event.decision?.action || "";
       const decisionId = event.decision?.decision_id || "";
-      const approval = state.approvalIndex[decisionId];
+      const resultGate = event.tool_result_gate || null;
+      const approval = state.approvalIndex[resultGate?.approval_id || decisionId];
       const approvalLink =
-        decisionAction === "require_approval" && approval?.approval_id
+        (decisionAction === "require_approval" || resultGate?.proposed_action === "require_approval") && approval?.approval_id
           ? `<button class="inline-button timeline-approval-link" type="button" data-approval-id="${escapeHtml(String(approval.approval_id))}">${escapeHtml(t("approvalsViewInbox"))}</button>`
           : "";
       const decision = decisionAction ? `${t("action")}: ${decisionAction}` : "";
+      const gateSummary = resultGate
+        ? `Tool Result Gate: ${resultGate.mode}/${resultGate.review} · ${resultGate.verdict || resultGate.error_code || "rules"} · ${resultGate.effective_action}`
+        : "";
       const eventId = event.event_id || event.requested?.event_id || event.id || "";
       const active = eventId && eventId === state.selectedEventId ? " active" : "";
       const findings = Array.isArray(event.findings) ? event.findings : [];
@@ -1113,6 +1135,7 @@ function renderTimeline(target, timeline) {
           <span class="meta">
             <span>${escapeHtml(event.capability || "-")}</span>
             <span>${escapeHtml(decision || "allow")}</span>
+            ${gateSummary ? `<span>${escapeHtml(gateSummary)}</span>` : ""}
             ${approvalLink}
             <span>${findingCount} ${t("findings")}</span>
           </span>
@@ -1281,12 +1304,20 @@ function renderPolicyHistory(target, decisions) {
     .join("");
 }
 
-function renderLLMAdjudications(target, adjudications) {
-  if (!adjudications.length) {
+function renderLLMAdjudications(target, adjudications, toolResultGates = []) {
+  if (!adjudications.length && !toolResultGates.length) {
     target.innerHTML = `<span class="meta">${escapeHtml(t("noAdjudications"))}</span>`;
     return;
   }
-  target.innerHTML = adjudications
+  const gateRows = toolResultGates.map((item) => `
+    <article class="adjudication-row">
+      <strong>Tool Result Gate · ${escapeHtml(item.mode || "-")} · ${escapeHtml(item.review || "-")}</strong>
+      <span>${escapeHtml(t("action"))}: ${escapeHtml(item.base_action || "-")} → ${escapeHtml(item.proposed_action || "-")} → ${escapeHtml(item.effective_action || "-")}</span>
+      <span>Verdict: ${escapeHtml(item.verdict || item.error_code || "rules")}</span>
+      <span>${escapeHtml(item.latency_ms || 0)} ms · ${escapeHtml(item.response_byte_count || 0)} bytes</span>
+    </article>
+  `).join("");
+  const adjudicationRows = adjudications
     .map((item) => {
       const verdict = item.result?.verdict || item.error_code || item.status || "-";
       const confidence = item.result?.confidence;
@@ -1301,6 +1332,7 @@ function renderLLMAdjudications(target, adjudications) {
       `;
     })
     .join("");
+  target.innerHTML = gateRows + adjudicationRows;
 }
 
 function renderBom(target, bom) {

@@ -1,0 +1,22 @@
+mode: audit
+tool_result_gate:
+  mode: shadow
+  review: rules
+  min_confidence: 0.85
+  true_positive_action: block
+  false_positive_action: allow
+  max_pending_responses: 256
+  max_buffer_bytes: 33554432
+policies:
+  - id: block-critical-result-injection
+    match:
+      event_type: tool.call.completed
+      rule_id: prompt-injection-tool-result
+      severity: critical
+    action: block
+
+  - id: alert-result-injection
+    match:
+      event_type: tool.call.completed
+      rule_id: prompt-injection-tool-result
+    action: alert

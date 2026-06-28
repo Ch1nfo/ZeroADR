@@ -1,3 +1,3 @@
-"""ZeroADR local-first agent runtime security platform."""
+"""ZeroADR agent runtime security platform."""
 
-__version__ = "1.0.0rc1"
+__version__ = "1.1.0rc1"

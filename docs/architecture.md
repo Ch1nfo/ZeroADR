@@ -1,10 +1,10 @@
 # ZeroADR Architecture
 
-ZeroADR is an Agent Runtime Security Platform. The current implementation is the
-MCP-first v0.1 loop:
+ZeroADR is an Agent Runtime Security Platform with request-time and MCP
+result-time controls:
 
 ```text
-MCP stdio proxy -> RuntimeEvent -> Capability Mapping -> Detection -> Policy -> Trace -> Replay
+MCP stdio proxy -> RuntimeEvent -> Capability Mapping -> Detection -> Policy -> Result Gate -> Trace/Replay
 ```
 
 ## Runtime Flow
@@ -17,21 +17,24 @@ flowchart TD
     Detection --> Policy["Policy Engine"]
     Policy -->|"allow or alert"| MCPServer["MCP Server"]
     Policy -->|"block"| JsonRpcError["JSON-RPC Error"]
+    MCPServer --> ResultGate["Tool Result Gate"]
+    ResultGate -->|"allow or approved"| AgentClient
+    ResultGate -->|"block, denied, or expired"| JsonRpcError
     Normalization --> Trace["JSONL + SQLite Trace"]
     Trace --> Replay["Replay CLI"]
 ```
 
 ## Planes
 
-- Collection Plane: MCP stdio proxy today; hooks, adapters, and sensors later.
+- Collection Plane: MCP stdio proxy, hooks, replay, and Endpoint sensors.
 - Normalization Plane: `RuntimeEvent` and capability mapping.
 - Trace Plane: `SessionTrace`, findings, and policy decisions.
 - Detection Plane: deterministic rule and sequence detectors.
-- Control Plane: `allow`, `alert`, and `block` in v0.1.
-- Operations Plane: CLI inspect, export, and replay today; console later.
+- Control Plane: `allow`, `alert`, `block`, approval, and MCP Tool Result Gate.
+- Operations Plane: CLI, API, Console, reconstruction, evidence, and replay.
 
 ## Current Boundaries
 
-The v0.1 gateway is local-first and does not call remote services. It handles
-inline decisions before `tools/call` reaches the MCP server, while replay handles
-session-level chain detection over saved traces.
+The gateway handles inline decisions before `tools/call` reaches the MCP server
+and can hold successful responses for rules or bounded Hybrid review. Hook
+post-tool, Endpoint, and Replay remain observational.

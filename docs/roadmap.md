@@ -1,12 +1,12 @@
 # Roadmap
 
-## v1.0 Release Candidate
+## v1.1 Tool Result Gate Release Candidate
 
-Status: `1.0.0rc1` ready; external publication not performed.
+Status: `1.1.0rc1` implementation and release verification.
 
-- production runtime and benchmark packaging are separated;
-- AgentDojo validation lives in `evaluation/agentdojo`;
-- final `1.0.0` requires the privileged Linux BCC release gate.
+- production MCP result review with rules, Hybrid LLM, and approval;
+- ordered response release with bounded pending and buffer resources;
+- dedicated sanitized audit, metrics, session API, and Console visibility.
 
 ## v0.1 MCP Runtime MVP
 

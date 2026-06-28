@@ -17,7 +17,7 @@ ZeroADR stores sensitive local configuration and evaluation artifacts under
 
 ## Scope boundary
 
-`1.0.0rc1` covers local MCP request-time enforcement, hooks, approval state,
-local APIs, LLM triage/gate behavior, and Endpoint collection. Production MCP
-response gating, kernel-level prevention, and remote multi-tenant operation
-are not part of the supported 1.0 contract.
+`1.1.0rc1` covers MCP request-time enforcement, production MCP Tool Result
+Gate behavior, hooks, approval state, local APIs, LLM triage/review, and
+Endpoint collection. Tool Result rewriting, kernel-level prevention, and
+remote multi-tenant operation are outside the supported contract.

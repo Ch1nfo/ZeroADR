@@ -4,15 +4,28 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from zeroadr.core.events import RuntimeEvent, new_event
+from zeroadr.core.approvals import ApprovalRequest, new_approval_request
+from zeroadr.core.findings import Finding
 from zeroadr.core.ids import new_ulid
+from zeroadr.core.policies import PolicyAction, new_policy_decision
+from zeroadr.core.tool_result_gate import ToolResultGateRecord, new_tool_result_gate_record
 from zeroadr.gateway.jsonrpc import encode_jsonrpc, encode_mcp_frame
 from zeroadr.hook.approval_wait import wait_for_approval_resolution
 from zeroadr.llm.adjudication import LLMAdjudicator, build_llm_adjudicator
+from zeroadr.llm.models import LLMAdjudication
+from zeroadr.llm.provider import LLMProviderError
+from zeroadr.llm.tool_result_review import (
+    PreparedToolResultReview,
+    build_tool_result_review_payload,
+    build_tool_result_reviewer,
+)
 from zeroadr.normalization.capability_mapper import map_capability
 from zeroadr.policy.engine import PolicyEngine
 from zeroadr.runtime.approvals import DEFAULT_APPROVAL_TIMEOUT_SECONDS
@@ -41,6 +54,22 @@ class ClientInspectionResult:
     pending: PendingCall | None = None
 
 
+@dataclass(frozen=True)
+class ToolResultInspectionResult:
+    action: PolicyAction = "allow"
+    error_code: int | None = None
+    approval_request: ApprovalRequest | None = None
+    adjudication: LLMAdjudication | None = None
+    gate_record: ToolResultGateRecord | None = None
+
+
+@dataclass(frozen=True)
+class PreparedShadowToolResult:
+    event: RuntimeEvent
+    findings: list[Finding]
+    review: PreparedToolResultReview
+
+
 class GatewayRuntime:
     def __init__(
         self,
@@ -51,6 +80,7 @@ class GatewayRuntime:
         trace_path: Path | None = None,
         db_path: Path | None = None,
         adjudicator: LLMAdjudicator | None = None,
+        tool_result_reviewer: LLMAdjudicator | None = None,
     ) -> None:
         self.session_id = session_id or f"sess_{new_ulid()}"
         self.server_name = server_name
@@ -65,6 +95,7 @@ class GatewayRuntime:
             adjudicator=adjudicator,
         )
         self.pending: dict[str | int, PendingCall] = {}
+        self.tool_result_reviewer = tool_result_reviewer
         self.decision_service.record(
             new_event(
                 event_type="session.start",
@@ -116,17 +147,36 @@ class GatewayRuntime:
             self.pending[pending.request_id] = pending
         return ClientInspectionResult(pending=pending)
 
-    def inspect_server_message(self, message: dict[str, Any]) -> None:
+    def inspect_server_message(
+        self,
+        message: dict[str, Any],
+        *,
+        response_byte_count: int = 0,
+        resource_limit_exceeded: bool = False,
+    ) -> ToolResultInspectionResult:
         request_id = message.get("id")
         if not isinstance(request_id, str | int):
-            return
+            return ToolResultInspectionResult()
         pending = self.pending.pop(request_id, None)
         if not pending:
-            return
+            return ToolResultInspectionResult()
+        event = self._server_event(message, pending)
+        gate = self.policy_engine.tool_result_gate
+        if event.event_type != "tool.call.completed" or gate is None:
+            self.decision_service.record(event)
+            return ToolResultInspectionResult()
+        return self._inspect_tool_result(
+            event,
+            response_byte_count=response_byte_count,
+            resource_limit_exceeded=resource_limit_exceeded,
+        )
+
+    def _server_event(self, message: dict[str, Any], pending: PendingCall) -> RuntimeEvent:
+        request_id = pending.request_id
         event_type: Literal["tool.call.failed", "tool.call.completed"] = (
             "tool.call.failed" if "error" in message else "tool.call.completed"
         )
-        event = new_event(
+        return new_event(
             event_type=event_type,
             source_type="mcp_gateway",
             session_id=self.session_id,
@@ -139,7 +189,226 @@ class GatewayRuntime:
             error=message.get("error") if isinstance(message.get("error"), dict) else None,
             raw=message,
         )
-        self.decision_service.record(event)
+
+    def prepare_shadow_tool_result(
+        self, message: dict[str, Any]
+    ) -> PreparedShadowToolResult | None:
+        request_id = message.get("id")
+        if not isinstance(request_id, str | int):
+            return None
+        pending = self.pending.pop(request_id, None)
+        if pending is None:
+            return None
+        event = self._server_event(message, pending)
+        if event.event_type != "tool.call.completed":
+            self.decision_service.record(event)
+            return None
+        findings = self.decision_service.detector.detect(event)
+        prepared = build_tool_result_review_payload(event, findings, case_id=event.event_id)
+        sanitized_event = event.model_copy(
+            update={"result": prepared.payload["event"]["result"], "raw": {}}
+        )
+        return PreparedShadowToolResult(
+            event=sanitized_event,
+            findings=findings,
+            review=prepared,
+        )
+
+    def inspect_prepared_shadow_tool_result(
+        self,
+        prepared: PreparedShadowToolResult,
+        *,
+        response_byte_count: int,
+    ) -> ToolResultInspectionResult:
+        return self._inspect_tool_result(
+            prepared.event,
+            response_byte_count=response_byte_count,
+            findings_override=prepared.findings,
+            prepared_override=prepared.review,
+        )
+
+    def _inspect_tool_result(
+        self,
+        event: RuntimeEvent,
+        *,
+        response_byte_count: int,
+        resource_limit_exceeded: bool = False,
+        findings_override: list[Finding] | None = None,
+        prepared_override: PreparedToolResultReview | None = None,
+    ) -> ToolResultInspectionResult:
+        started = time.monotonic()
+        gate = self.policy_engine.tool_result_gate
+        assert gate is not None
+        findings = (
+            findings_override
+            if findings_override is not None
+            else self.decision_service.detector.detect(event)
+        )
+        prepared = prepared_override or build_tool_result_review_payload(
+            event, findings, case_id=event.event_id
+        )
+        preview = prepared.payload["event"]["result"]
+        stored_event = event.model_copy(update={"result": preview, "raw": {}})
+        self.decision_service.record(stored_event)
+        if self.decision_service.store:
+            for finding in findings:
+                self.decision_service.store.save_finding(finding)
+        base_decision = self.policy_engine.evaluate(event, findings)
+        proposed_action = base_decision.action
+        effective_action: PolicyAction
+        adjudication: LLMAdjudication | None = None
+        approval_request: ApprovalRequest | None = None
+        error_code: str | None = None
+        verdict: str | None = None
+        confidence: float | None = None
+        has_critical = any(finding.severity == "critical" for finding in findings)
+        if resource_limit_exceeded:
+            error_code = "resource_limit"
+            proposed_action = "block" if gate.mode == "enforce" else "allow"
+        elif gate.review == "hybrid":
+            if has_critical:
+                proposed_action = gate.true_positive_action
+            else:
+                adjudication_id = new_ulid()
+                try:
+                    if self.tool_result_reviewer is None:
+                        raise LLMProviderError(
+                            "missing_llm_config", "Tool Result reviewer is not configured."
+                        )
+                    provider_result = self.tool_result_reviewer.adjudicate(
+                        payload=prepared.payload,
+                        evidence_refs=set(prepared.evidence_refs),
+                    )
+                    verdict = provider_result.result.verdict
+                    confidence = provider_result.result.confidence
+                    if confidence < gate.min_confidence or verdict == "uncertain":
+                        proposed_action = "require_approval"
+                    elif verdict == "likely_true_positive":
+                        proposed_action = gate.true_positive_action
+                    else:
+                        proposed_action = gate.false_positive_action
+                    adjudication = LLMAdjudication(
+                        adjudication_id=adjudication_id,
+                        session_id=event.session_id,
+                        event_id=event.event_id,
+                        finding_ids=[finding.finding_id for finding in findings],
+                        policy_id=base_decision.policy_id or "tool-result-gate",
+                        created_at=datetime.now(UTC),
+                        status="completed",
+                        mode=gate.mode,
+                        stage="tool_result",
+                        provider="openai-compatible",
+                        model=self.tool_result_reviewer.model,
+                        prompt_version=getattr(
+                            self.tool_result_reviewer,
+                            "prompt_version",
+                            "tool-result-review-v0.2",
+                        ),
+                        input_sha256=prepared.input_sha256,
+                        result=provider_result.result,
+                        proposed_action=proposed_action,
+                        final_action=(proposed_action if gate.mode == "enforce" else "allow"),
+                        latency_ms=provider_result.latency_ms,
+                        token_usage=provider_result.token_usage,
+                        provider_request_id=provider_result.provider_request_id,
+                    )
+                except Exception as exc:
+                    error_code = (
+                        exc.code if isinstance(exc, LLMProviderError) else "review_internal_error"
+                    )
+                    proposed_action = "require_approval"
+                    adjudication = LLMAdjudication(
+                        adjudication_id=adjudication_id,
+                        session_id=event.session_id,
+                        event_id=event.event_id,
+                        finding_ids=[finding.finding_id for finding in findings],
+                        policy_id=base_decision.policy_id or "tool-result-gate",
+                        created_at=datetime.now(UTC),
+                        status="failed",
+                        mode=gate.mode,
+                        stage="tool_result",
+                        provider="openai-compatible",
+                        model=(self.tool_result_reviewer.model if self.tool_result_reviewer else "unconfigured"),
+                        prompt_version=getattr(
+                            self.tool_result_reviewer,
+                            "prompt_version",
+                            "tool-result-review-v0.2",
+                        ),
+                        input_sha256=prepared.input_sha256,
+                        proposed_action="require_approval",
+                        final_action=("require_approval" if gate.mode == "enforce" else "allow"),
+                        latency_ms=0,
+                        error_code=error_code,
+                        error_message="Tool Result review failed safely.",
+                    )
+        effective_action = proposed_action if gate.mode == "enforce" else "allow"
+        decision = new_policy_decision(
+            policy_id=base_decision.policy_id,
+            action=effective_action,
+            reason=(
+                "Tool Result Gate shadow observation."
+                if gate.mode == "shadow"
+                else "Tool Result Gate enforced the reviewed result."
+            ),
+            session_id=event.session_id,
+            event_id=event.event_id,
+            finding_ids=[finding.finding_id for finding in findings],
+        )
+        if self.decision_service.store:
+            self.decision_service.store.save_policy_decision(decision)
+            if adjudication is not None:
+                self.decision_service.store.save_llm_adjudication(adjudication)
+            if effective_action == "require_approval":
+                approval_request = new_approval_request(
+                    decision_id=decision.decision_id,
+                    session_id=event.session_id,
+                    event_id=event.event_id,
+                    request_id=event.request_id,
+                    policy_id=decision.policy_id,
+                    reason=decision.reason,
+                    finding_ids=decision.finding_ids,
+                    tool_name=event.tool_name,
+                    capability=event.capability,
+                    arguments=None,
+                    stage="tool_result",
+                    result_preview=preview,
+                )
+                self.decision_service.store.save_approval_request(approval_request)
+        record = new_tool_result_gate_record(
+            session_id=event.session_id,
+            event_id=event.event_id,
+            request_id=event.request_id,
+            mode=gate.mode,
+            review=gate.review,
+            base_action=base_decision.action,
+            proposed_action=proposed_action,
+            effective_action=effective_action,
+            finding_ids=[finding.finding_id for finding in findings],
+            rule_ids=[finding.rule_id for finding in findings],
+            adjudication_id=adjudication.adjudication_id if adjudication else None,
+            approval_id=approval_request.approval_id if approval_request else None,
+            approval_status="pending" if approval_request else None,
+            verdict=verdict,
+            confidence=confidence,
+            response_byte_count=response_byte_count,
+            evidence_truncated=prepared.truncated,
+            latency_ms=max(0, round((time.monotonic() - started) * 1000)),
+            error_code=error_code,
+            result_preview=preview,
+        )
+        if self.decision_service.store:
+            self.decision_service.store.save_tool_result_gate_record(record)
+        return ToolResultInspectionResult(
+            action=effective_action,
+            error_code=(
+                -32004
+                if resource_limit_exceeded and gate.mode == "enforce"
+                else (-32001 if effective_action == "block" else None)
+            ),
+            approval_request=approval_request,
+            adjudication=adjudication,
+            gate_record=record,
+        )
 
     def render_approval_block_response(
         self,
@@ -160,6 +429,59 @@ class GatewayRuntime:
             message="Denied by ZeroADR approval",
             reason=str(outcome.get("resolution_comment") or "Approval denied."),
         )
+
+    def render_tool_result_error(
+        self,
+        request_id: str | int | None,
+        *,
+        code: int,
+        message: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        return self.policy_engine.render_approval_jsonrpc_error(
+            request_id,
+            code=code,
+            message=message,
+            reason=reason,
+        )
+
+    def expire_pending_tool_result_approvals(self) -> None:
+        store = self.decision_service.store
+        if store is None:
+            return
+        records_by_approval = {
+            record.approval_id: record
+            for record in store.tool_result_gate_records_for_session(self.session_id)
+            if record.approval_id
+        }
+        for request in store.list_approval_requests(
+            status="pending", session_id=self.session_id
+        ):
+            if request.stage != "tool_result":
+                continue
+            try:
+                store.mark_approval_expired(request.approval_id)
+                record = records_by_approval.get(request.approval_id)
+                if record is not None:
+                    self.finalize_tool_result_approval(record, status="expired")
+            except Exception:
+                continue
+
+    def finalize_tool_result_approval(
+        self,
+        record: ToolResultGateRecord,
+        *,
+        status: Literal["approved", "denied", "expired"],
+    ) -> ToolResultGateRecord:
+        updated = record.model_copy(
+            update={
+                "approval_status": status,
+                "effective_action": "allow" if status == "approved" else "block",
+            }
+        )
+        if self.decision_service.store:
+            self.decision_service.store.save_tool_result_gate_record(updated)
+        return updated
 
 
 async def run_stdio_proxy(
@@ -182,6 +504,12 @@ async def run_stdio_proxy(
             if policy_engine.has_llm_adjudication()
             else None
         ),
+        tool_result_reviewer=(
+            build_tool_result_reviewer(llm_config_path)
+            if policy_engine.tool_result_gate is not None
+            and policy_engine.tool_result_gate.review == "hybrid"
+            else None
+        ),
     )
     process = await asyncio.create_subprocess_exec(
         *command,
@@ -201,6 +529,7 @@ async def run_stdio_proxy(
     output_lock = asyncio.Lock()
     responses_drained = asyncio.Event()
     responses_drained.set()
+    response_slot_released = asyncio.Event()
 
     async def flush_ordered_responses() -> None:
         async with output_lock:
@@ -211,6 +540,7 @@ async def run_stdio_proxy(
                     sys.stdout.buffer.write(response)
                     sys.stdout.buffer.flush()
                     response_order.pop(0)
+                    response_slot_released.set()
                     if not response_order:
                         responses_drained.set()
                     continue
@@ -219,6 +549,7 @@ async def run_stdio_proxy(
                     sys.stdout.buffer.write(line)
                     sys.stdout.buffer.flush()
                     response_order.pop(0)
+                    response_slot_released.set()
                     if not response_order:
                         responses_drained.set()
                     continue
@@ -235,6 +566,24 @@ async def run_stdio_proxy(
             request_id = message.get("id")
             ordered_id = request_id if isinstance(request_id, str | int) else None
             if ordered_id is not None:
+                if ordered_id in response_order or ordered_id in runtime.pending:
+                    duplicate = {
+                        "jsonrpc": "2.0",
+                        "id": ordered_id,
+                        "error": {
+                            "code": -32600,
+                            "message": "Duplicate in-flight JSON-RPC request id",
+                            "data": {"reason": "Request IDs must be unique until completion."},
+                        },
+                    }
+                    async with output_lock:
+                        sys.stdout.buffer.write(encode_framed_response(duplicate, framed.framing))
+                        sys.stdout.buffer.flush()
+                    continue
+                gate = policy_engine.tool_result_gate
+                while gate is not None and len(response_order) >= gate.max_pending_responses:
+                    response_slot_released.clear()
+                    await response_slot_released.wait()
                 response_order.append(ordered_id)
                 responses_drained.clear()
             inspection = await asyncio.to_thread(
@@ -284,12 +633,114 @@ async def run_stdio_proxy(
             if not framed:
                 return
             message = framed.message
-            runtime.inspect_server_message(message)
             request_id = message.get("id")
             if isinstance(request_id, str | int):
-                server_responses[request_id] = framed.raw
+                if request_id not in response_order:
+                    runtime.inspect_server_message(message, response_byte_count=len(framed.raw))
+                    async with output_lock:
+                        sys.stdout.buffer.write(framed.raw)
+                        sys.stdout.buffer.flush()
+                    continue
+                gate = (
+                    policy_engine.tool_result_gate
+                    if request_id in runtime.pending
+                    else None
+                )
+                projected_buffer_bytes = len(framed.raw) + sum(
+                    len(response) for response in server_responses.values()
+                )
+                if gate is not None and projected_buffer_bytes > gate.max_buffer_bytes:
+                    inspection = await asyncio.to_thread(
+                        runtime.inspect_server_message,
+                        message,
+                        response_byte_count=len(framed.raw),
+                        resource_limit_exceeded=True,
+                    )
+                    if gate.mode == "enforce":
+                        resource_error = runtime.render_tool_result_error(
+                            request_id,
+                            code=-32004,
+                            message="Tool Result Gate resource limit",
+                            reason="Buffered MCP response exceeded the configured byte limit.",
+                        )
+                        server_responses[request_id] = encode_framed_response(
+                            resource_error, framed.framing
+                        )
+                    else:
+                        server_responses[request_id] = framed.raw
+                    await flush_ordered_responses()
+                    continue
+                if gate is not None and gate.mode == "shadow" and gate.review == "hybrid":
+                    prepared_shadow = runtime.prepare_shadow_tool_result(message)
+                    server_responses[request_id] = framed.raw
+                    await flush_ordered_responses()
+                    if prepared_shadow is None:
+                        continue
+                    task = asyncio.create_task(
+                        asyncio.to_thread(
+                            runtime.inspect_prepared_shadow_tool_result,
+                            prepared_shadow,
+                            response_byte_count=len(framed.raw),
+                        )
+                    )
+                    shadow_review_tasks.add(task)
+                    task.add_done_callback(shadow_review_tasks.discard)
+                    continue
+                inspection = await asyncio.to_thread(
+                    runtime.inspect_server_message,
+                    message,
+                    response_byte_count=len(framed.raw),
+                )
+                if inspection.action == "block":
+                    response = runtime.render_tool_result_error(
+                        request_id,
+                        code=-32001,
+                        message="Blocked by ZeroADR Tool Result Gate",
+                        reason="The MCP tool result was blocked by policy.",
+                    )
+                    server_responses[request_id] = encode_framed_response(response, framed.framing)
+                elif inspection.action == "require_approval" and inspection.approval_request:
+                    outcome = await asyncio.to_thread(
+                        wait_for_approval_resolution,
+                        db_path,
+                        inspection.approval_request.approval_id,
+                        timeout=approval_timeout,
+                        poll_interval=approval_poll_interval,
+                        trace_path=trace_path,
+                    )
+                    outcome_status = str(outcome.get("status", "denied"))
+                    if outcome_status not in {"approved", "denied", "expired"}:
+                        outcome_status = "denied"
+                    if inspection.gate_record is not None:
+                        runtime.finalize_tool_result_approval(
+                            inspection.gate_record,
+                            status=outcome_status,  # type: ignore[arg-type]
+                        )
+                    if outcome.get("effective_action") == "allow":
+                        server_responses[request_id] = framed.raw
+                    else:
+                        expired = outcome.get("status") == "expired"
+                        response = runtime.render_tool_result_error(
+                            request_id,
+                            code=-32003 if expired else -32002,
+                            message=(
+                                "Tool Result approval expired"
+                                if expired
+                                else "Tool Result approval denied"
+                            ),
+                            reason=str(
+                                outcome.get("resolution_comment")
+                                or "The untrusted result was not approved."
+                            ),
+                        )
+                        server_responses[request_id] = encode_framed_response(
+                            response, framed.framing
+                        )
+                else:
+                    server_responses[request_id] = framed.raw
                 await flush_ordered_responses()
             else:
+                runtime.inspect_server_message(message, response_byte_count=len(framed.raw))
                 sys.stdout.buffer.write(framed.raw)
                 sys.stdout.buffer.flush()
 
@@ -304,9 +755,15 @@ async def run_stdio_proxy(
     client_task = asyncio.create_task(client_to_server())
     server_task = asyncio.create_task(server_to_client())
     stderr_task = asyncio.create_task(stderr_to_log())
+    shadow_review_tasks: set[asyncio.Task[Any]] = set()
     try:
         await client_task
-        await asyncio.wait_for(responses_drained.wait(), timeout=10.0)
+        try:
+            await asyncio.wait_for(responses_drained.wait(), timeout=10.0)
+        except TimeoutError:
+            process.terminate()
+            response_order.clear()
+            responses_drained.set()
         try:
             return_code = await asyncio.wait_for(process.wait(), timeout=1.0)
         except TimeoutError:
@@ -314,10 +771,15 @@ async def run_stdio_proxy(
             return_code = await process.wait()
         await server_task
         await stderr_task
+        if shadow_review_tasks:
+            done, pending_tasks = await asyncio.wait(shadow_review_tasks, timeout=10.0)
+            for task in pending_tasks:
+                task.cancel()
     except KeyboardInterrupt:
         process.terminate()
         return_code = await process.wait()
     finally:
+        runtime.expire_pending_tool_result_approvals()
         for task in (client_task, server_task, stderr_task):
             if not task.done():
                 task.cancel()

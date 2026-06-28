@@ -8,6 +8,7 @@ from zeroadr.core.approvals import ApprovalRequest, ApprovalStatus, ResolvedAppr
 from zeroadr.core.events import RuntimeEvent
 from zeroadr.core.findings import Finding
 from zeroadr.core.policies import PolicyDecision
+from zeroadr.core.tool_result_gate import ToolResultGateRecord
 from zeroadr.llm.models import LLMAdjudication, LLMAnalysis
 
 
@@ -63,6 +64,15 @@ class SQLiteStore:
             conn.execute(
                 "create index if not exists idx_llm_adjudications_session_created "
                 "on llm_adjudications(session_id, created_at, adjudication_id)"
+            )
+            conn.execute(
+                "create table if not exists tool_result_gate_records "
+                "(gate_record_id text primary key, session_id text not null, event_id text not null, "
+                "created_at text not null, record_json text not null)"
+            )
+            conn.execute(
+                "create index if not exists idx_tool_result_gate_session_created "
+                "on tool_result_gate_records(session_id, created_at, gate_record_id)"
             )
 
     def save_event(self, event: RuntimeEvent) -> None:
@@ -133,6 +143,37 @@ class SQLiteStore:
                     adjudication.model_dump_json(),
                 ),
             )
+
+    def save_tool_result_gate_record(self, record: ToolResultGateRecord) -> None:
+        with self._connect() as conn:
+            conn.execute("insert or ignore into sessions(session_id) values (?)", (record.session_id,))
+            conn.execute(
+                "insert or replace into tool_result_gate_records"
+                "(gate_record_id, session_id, event_id, created_at, record_json) values (?, ?, ?, ?, ?)",
+                (
+                    record.gate_record_id,
+                    record.session_id,
+                    record.event_id,
+                    record.created_at.isoformat(),
+                    record.model_dump_json(),
+                ),
+            )
+
+    def tool_result_gate_records_for_session(self, session_id: str) -> list[ToolResultGateRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "select record_json from tool_result_gate_records where session_id = ? "
+                "order by created_at, gate_record_id",
+                (session_id,),
+            )
+            return [ToolResultGateRecord.model_validate_json(row[0]) for row in rows]
+
+    def tool_result_gate_records(self) -> list[ToolResultGateRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "select record_json from tool_result_gate_records order by created_at, gate_record_id"
+            )
+            return [ToolResultGateRecord.model_validate_json(row[0]) for row in rows]
 
     def llm_adjudications_for_session(self, session_id: str) -> list[LLMAdjudication]:
         return self.llm_adjudications(session_id=session_id)

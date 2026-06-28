@@ -17,6 +17,7 @@ from zeroadr.core.findings import Finding
 from zeroadr.llm.adjudication import ProviderAdjudication
 from zeroadr.llm.models import LLMAdjudicationResult, TokenUsage
 from zeroadr.llm.provider import LLMProviderError
+from zeroadr.llm.config import LLMConfigurationError, resolve_llm_gate_config
 from zeroadr.security.redaction import redact_event, redact_value
 
 MAX_TOOL_RESULT_REVIEW_BYTES = 16 * 1024
@@ -168,6 +169,20 @@ class OpenAICompatibleToolResultReviewer:
             provider_request_id=response.headers.get("x-request-id"),
             latency_ms=max(0, round((time.monotonic() - started) * 1000)),
         )
+
+
+def build_tool_result_reviewer(config_path: Path) -> OpenAICompatibleToolResultReviewer | None:
+    try:
+        config = resolve_llm_gate_config(config_path=config_path)
+    except LLMConfigurationError:
+        return None
+    return OpenAICompatibleToolResultReviewer(
+        base_url=config.base_url,
+        api_key=config.api_key,
+        model=config.model,
+        timeout=config.timeout,
+        max_output_tokens=config.max_output_tokens,
+    )
 
 
 class ToolResultReviewCache:

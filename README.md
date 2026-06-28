@@ -4,7 +4,7 @@
 
 ### Agent Runtime Detection, Response, and Policy Enforcement
 
-[![Version](https://img.shields.io/badge/version-1.0.0rc1-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-1.1.0rc1-blue.svg)](#)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#)
@@ -25,8 +25,8 @@ effects. The missing control point is the agent runtime itself: which tool was
 called, what target it touched, what evidence led to the action, and whether
 the action matched policy before execution.
 
-**ZeroADR** (Zero Agentic Detection and Response) is a local-first security
-platform for that runtime layer. It normalizes MCP, Hook, replay, and Endpoint
+**ZeroADR** (Zero Agentic Detection and Response) is an agent runtime security
+platform for that control layer. It normalizes MCP, Hook, replay, and Endpoint
 activity into a common `RuntimeEvent` model, detects risky behavior, applies
 policy actions, pauses selected operations for human approval, and preserves a
 replayable evidence chain in JSONL and SQLite.
@@ -51,7 +51,11 @@ replayable evidence chain in JSONL and SQLite.
 ### Runtime Control
 
 - **MCP stdio gateway** — proxies line-delimited and `Content-Length` framed
-  JSON-RPC, inspects `tools/call`, and returns protocol-safe block responses.
+  JSON-RPC, inspects `tools/call` requests and successful tool responses, and
+  returns protocol-safe block responses.
+- **Production Tool Result Gate** — holds MCP results before the Agent receives
+  them, applies rules or Hybrid LLM review, and supports shadow, block, and
+  result-stage approval flows without rewriting allowed content.
 - **Agent Hook adapters** — accepts Generic JSON, Claude Code, and Codex-style
   pre-tool and post-tool events through one normalized decision path.
 - **Approval and resume** — persists `require_approval` requests in SQLite,
@@ -111,6 +115,8 @@ prevention.
 - **Hybrid LLM Gate** — combines deterministic findings with a structured model
   verdict; timeout, invalid output, provider failure, or low confidence falls
   back to `require_approval`.
+- **MCP result review** — reviews every successful result in Hybrid mode while
+  deterministic critical findings bypass model downgrade.
 - **Deterministic action ownership** — the model never returns the policy
   action. ZeroADR maps a validated verdict to the final action.
 - **Calibration workflow** — supports shadow labels, confidence scans,
@@ -181,7 +187,7 @@ dependencies; the independent companion lives in
                                 ▼
 ┌────────────────────────────────────────────────────────────────────┐
 │ Collection and Adapters                                            │
-│ MCP stdio gateway │ Hook adapters │ Replay │ Endpoint ingest/BCC   │
+│ MCP request/result gateway │ Hook adapters │ Replay │ Endpoint/BCC │
 └───────────────────────────────┬────────────────────────────────────┘
                                 ▼
 ┌────────────────────────────────────────────────────────────────────┐
@@ -213,15 +219,15 @@ Core design principles:
   policy owns enforcement and approval behavior.
 - **Keep inline control fail-safe** — deterministic critical findings cannot be
   downgraded by the LLM, and semantic-review failures require human approval.
-- **Preserve complete local evidence** — redacted bounded model payloads do not
-  replace the full local event and decision record.
+- **Minimize untrusted result retention** — original MCP results remain in
+  process memory; persistent Gate evidence is redacted and bounded.
 - **Treat replay as a product primitive** — saved traces are executable test
   cases, incident evidence, and regression inputs.
 
 Main components:
 
-- `GatewayRuntime` — MCP request inspection, blocking, approval waiting, and
-  server-response recording.
+- `GatewayRuntime` — MCP request and result inspection, blocking, approval
+  waiting, ordered response release, and bounded audit recording.
 - `HookRuntime` — Generic, Claude Code, and Codex event adaptation.
 - `RuntimeDecisionService` — shared detection, policy, persistence, and approval
   coordination.
@@ -231,10 +237,9 @@ Main components:
 - Read-only API and Console — loopback inventory, evidence, approval, and health
   workflows.
 
-Current boundary: the online LLM Gate primarily evaluates MCP and Hook
-pre-tool requests. MCP `tool.call.completed` results are recorded and available
-for replay and offline review, but production MCP response gating that delays a
-server response until semantic review completes is not part of this release.
+The production Tool Result Gate covers MCP `tool.call.completed`. Hook
+post-tool, Endpoint, and Replay paths remain observational and do not claim
+synchronous result blocking.
 
 ## Quick Start
 
@@ -283,11 +288,17 @@ under `examples/hooks/`.
 
 ```bash
 zeroadr proxy \
-  --policy policies/default.yaml \
+  --policy policies/tool-result-gate-shadow.yaml \
   --trace .zeroadr/traces/latest.jsonl \
   --db .zeroadr/zeroadr.sqlite \
   -- <mcp-server-command>
 ```
+
+Start with the Shadow policy, then use
+`policies/tool-result-gate-enforce.yaml` after reviewing metrics and freezing
+the confidence threshold. Hybrid mode reads the private LLM configuration.
+Approving a result-stage request returns the original untrusted result to the
+Agent. See [`docs/tool-result-gate.md`](docs/tool-result-gate.md).
 
 ### Reconstruct a session
 
@@ -438,6 +449,8 @@ Local test directories and `.zeroadr/` private artifacts are Git-ignored.
 ZeroADR currently supports:
 
 - local MCP request-time policy enforcement;
+- production MCP Tool Result Gate enforcement with rules, Hybrid review, and
+  result-stage approval;
 - Generic, Claude Code, and Codex Hook decisions;
 - local approval, trace, replay, reconstruction, evidence, and Console flows;
 - observational Endpoint collection and supported Linux BCC probes;
@@ -445,14 +458,15 @@ ZeroADR currently supports:
 
 It does not currently provide:
 
-- production MCP server-response delay and semantic enforcement;
+- Tool Result content rewriting or sanitization;
 - kernel-level prevention through the Endpoint collector;
 - authentication, multi-user access, or remote multi-tenant deployment;
 - a guarantee that benchmark results generalize to every model, agent,
   injection style, or production environment.
 
-Final `1.0.0` remains gated on the privileged Linux BCC smoke documented in
-[`docs/release/1.0.0rc1-readiness.md`](docs/release/1.0.0rc1-readiness.md).
+Linux BCC validation passed for the 1.0 line; `1.0.0` GA was intentionally
+skipped. Current release readiness is tracked in
+[`docs/release/1.1.0rc1-readiness.md`](docs/release/1.1.0rc1-readiness.md).
 
 Report vulnerabilities through a private GitHub Security Advisory as described
 in [`SECURITY.md`](SECURITY.md).

@@ -34,23 +34,37 @@ def reconstruct_from_sqlite(session_id: str, db_path: Path) -> Context:
         adjudication.model_dump(mode="json") for adjudication in adjudications
     ]
     adjudication_by_event = {item.event_id: item for item in adjudications}
+    gate_records = store.tool_result_gate_records_for_session(session_id)
+    context["tool_result_gates"] = [record.model_dump(mode="json") for record in gate_records]
+    gate_by_event = {record.event_id: record for record in gate_records}
     for timeline_item in context["timeline"]:
         requested = timeline_item.get("requested") or {}
+        completed = timeline_item.get("completed") or {}
         requested_event_id = requested.get("event_id")
-        if not isinstance(requested_event_id, str):
-            continue
-        adjudication = adjudication_by_event.get(requested_event_id)
+        completed_event_id = completed.get("event_id")
+        adjudication = None
+        if isinstance(completed_event_id, str):
+            adjudication = adjudication_by_event.get(completed_event_id)
+        if adjudication is None and isinstance(requested_event_id, str):
+            adjudication = adjudication_by_event.get(requested_event_id)
         if adjudication is None:
-            continue
-        timeline_item["adjudication"] = {
-            "adjudication_id": adjudication.adjudication_id,
-            "mode": adjudication.mode,
-            "status": adjudication.status,
-            "verdict": adjudication.result.verdict if adjudication.result else None,
-            "confidence": adjudication.result.confidence if adjudication.result else None,
-            "proposed_action": adjudication.proposed_action,
-            "final_action": adjudication.final_action,
-        }
+            timeline_item["adjudication"] = None
+        else:
+            timeline_item["adjudication"] = {
+                "adjudication_id": adjudication.adjudication_id,
+                "stage": adjudication.stage,
+                "mode": adjudication.mode,
+                "status": adjudication.status,
+                "verdict": adjudication.result.verdict if adjudication.result else None,
+                "confidence": adjudication.result.confidence if adjudication.result else None,
+                "proposed_action": adjudication.proposed_action,
+                "final_action": adjudication.final_action,
+            }
+        if isinstance(completed_event_id, str):
+            gate_record = gate_by_event.get(completed_event_id)
+            timeline_item["tool_result_gate"] = (
+                gate_record.model_dump(mode="json") if gate_record else None
+            )
     context["risk_summary"]["pending_approval_count"] = store.pending_approval_count(session_id=session_id)
     return context
 
@@ -68,6 +82,7 @@ def reconstruct_session_trace(trace: SessionTrace) -> Context:
         "findings": [_finding_dict(finding) for finding in findings],
         "policy_decisions": [_decision_dict(decision) for decision in decisions],
         "llm_adjudications": [],
+        "tool_result_gates": [],
         "timeline": _build_timeline(events, findings, decisions),
         "risk_summary": _risk_summary(findings, decisions),
         "context_metadata": _context_metadata(events),
@@ -104,7 +119,9 @@ def _build_timeline(
         request_key = _request_key(event.request_id)
         terminal = terminal_by_request.get(request_key or "")
         policy_event = policy_event_by_request.get(request_key or "")
-        event_findings = findings_by_event.get(event.event_id, [])
+        event_findings = [*findings_by_event.get(event.event_id, [])]
+        if terminal is not None:
+            event_findings.extend(findings_by_event.get(terminal.event_id, []))
         timeline.append(
             {
                 "request_id": event.request_id,
@@ -116,6 +133,7 @@ def _build_timeline(
                 "decision": _timeline_decision(decision_by_event_id.get(event.event_id)),
                 "findings": [_finding_ref(finding) for finding in event_findings],
                 "adjudication": None,
+                "tool_result_gate": None,
             }
         )
     return timeline
