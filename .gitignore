@@ -11,7 +11,8 @@ Desktop.ini
 *.swp
 *.swo
 *~
-/docs
+/docs/release
+/docs/superpowers
 
 
 # Python bytecode and tool caches
