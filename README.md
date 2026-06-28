@@ -73,8 +73,17 @@ replayable evidence chain in JSONL and SQLite.
   flows, and reverse shells.
 - **Prompt-injection detection** — reviews tool results for English, Chinese,
   and structured instruction-redirection signals.
+- **Privilege escalation detection** — detects sudo/su commands, Docker
+  privileged containers, setuid modifications, container escape attempts, and
+  system configuration tampering.
+- **Secret leakage detection** — identifies 20+ credential patterns including
+  AWS keys, OpenAI API keys, GitHub tokens, private keys, and other secrets in
+  tool results and arguments.
+- **Code injection detection** — catches code write-execute chains, dynamic code
+  evaluation (eval/exec), and download-and-execute patterns.
 - **Sequence detectors** — identify injection followed by sensitive access or
-  dangerous execution, and sensitive reads followed by external transfer.
+  dangerous execution, sensitive reads followed by external transfer, and code
+  injection chains.
 - **Separated policy engine** — detectors describe risk; YAML policy maps that
   evidence to `allow`, `alert`, `block`, or `require_approval`.
 
