@@ -1,0 +1,10 @@
+{
+  "hook_event_type": "pre_tool_use",
+  "session_id": "sess_hook_example",
+  "request_id": 1,
+  "tool_name": "read_file",
+  "arguments": {
+    "path": "README.md"
+  },
+  "raw": {}
+}

@@ -1,0 +1,2 @@
+{"schema_version":"0.1","event_id":"endpoint_example_file","event_type":"sensitive_file_open","timestamp":"2026-06-26T00:00:00Z","session_id":"sess_endpoint_example","pid":501,"process":"python","path":".env"}
+{"schema_version":"0.1","event_id":"endpoint_example_network","event_type":"network_connect","timestamp":"2026-06-26T00:00:01Z","session_id":"sess_endpoint_example","pid":501,"process":"python","url":"https://webhook.site/endpoint-example"}

@@ -1,0 +1,35 @@
+[Unit]
+Description=ZeroADR Endpoint Agent (Linux BCC)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/zeroadr
+Environment=PYTHONPATH=src
+Environment=ZEROADR_ENABLE_BCC=1
+ExecStart=/usr/bin/python3 -m zeroadr.cli.main endpoint agent \
+  --collector linux \
+  --output .zeroadr/endpoint-agent.jsonl \
+  --status-file .zeroadr/endpoint-agent-status.json \
+  --pid-file .zeroadr/endpoint-agent.pid \
+  --trace .zeroadr/traces/endpoint-agent.jsonl \
+  --db .zeroadr/zeroadr.sqlite \
+  --strict-ingest \
+  --heartbeat-interval 5 \
+  --bcc-poll-timeout-ms 100 \
+  --bcc-max-queue 4096
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+# Option A: run as root (simplest on older kernels)
+User=root
+
+# Option B: non-root with capabilities (uncomment and set User=)
+# User=zeroadr
+# AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN
+# CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN
+# NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

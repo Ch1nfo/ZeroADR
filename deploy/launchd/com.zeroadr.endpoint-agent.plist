@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.zeroadr.endpoint-agent</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/usr/bin/python3</string>
+      <string>-m</string>
+      <string>zeroadr.cli.main</string>
+      <string>endpoint</string>
+      <string>agent</string>
+      <string>--collector</string>
+      <string>mock</string>
+      <string>--output</string>
+      <string>.zeroadr/endpoint-agent.jsonl</string>
+      <string>--status-file</string>
+      <string>.zeroadr/endpoint-agent-status.json</string>
+      <string>--pid-file</string>
+      <string>.zeroadr/endpoint-agent.pid</string>
+      <string>--trace</string>
+      <string>.zeroadr/traces/endpoint-agent.jsonl</string>
+      <string>--db</string>
+      <string>.zeroadr/zeroadr.sqlite</string>
+      <string>--strict-ingest</string>
+      <string>--heartbeat-interval</string>
+      <string>5</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/opt/zeroadr</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PYTHONPATH</key>
+      <string>src</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/zeroadr/endpoint-agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/zeroadr/endpoint-agent.error.log</string>
+  </dict>
+</plist>

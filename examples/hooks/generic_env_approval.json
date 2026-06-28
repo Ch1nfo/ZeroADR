@@ -1,0 +1,10 @@
+{
+  "hook_event_type": "pre_tool_use",
+  "session_id": "sess_hook_v02_generic",
+  "request_id": "generic_env_approval",
+  "tool_name": "read_file",
+  "arguments": {
+    "path": ".env"
+  },
+  "raw": {}
+}

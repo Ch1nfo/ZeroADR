@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ZeroADR Console</title>
+    <link rel="stylesheet" href="/console/assets/console.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <p class="eyebrow" data-i18n="eyebrow">本地只读控制台</p>
+          <h1>ZeroADR Console</h1>
+          <p class="subtitle" data-i18n="subtitle">Agent Runtime Security Console</p>
+        </div>
+        <div class="topbar-actions">
+          <button type="button" id="llm-settings-button" class="settings-button" data-i18n="llmSettingsButton">
+            大模型设置
+          </button>
+          <div class="language-toggle" id="language-toggle" role="group" aria-label="Language">
+            <button type="button" data-lang="zh" class="active">中文</button>
+            <button type="button" data-lang="en">EN</button>
+          </div>
+          <p id="api-status" class="status-pill">检查 API...</p>
+        </div>
+      </header>
+
+      <section class="metric-band" aria-label="Console summary">
+        <article>
+          <span data-i18n="metricSessions">会话</span>
+          <strong id="session-count">0</strong>
+        </article>
+        <article>
+          <span data-i18n="metricFindings">发现</span>
+          <strong id="finding-count">0</strong>
+        </article>
+        <article>
+          <span data-i18n="metricDecisions">决策</span>
+          <strong id="decision-count">0</strong>
+        </article>
+        <article>
+          <span data-i18n="metricPendingApprovals">待审批</span>
+          <strong id="pending-approval-count">0</strong>
+        </article>
+      </section>
+
+      <section class="agent-panel" id="endpoint-agent-panel" aria-label="Endpoint Agent">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow" data-i18n="agentEyebrow">Endpoint Agent</p>
+            <h2 data-i18n="agentTitle">Agent Health</h2>
+          </div>
+          <button type="button" id="agent-refresh" class="inline-button" data-i18n="agentRefresh">Refresh</button>
+        </div>
+        <div id="agent-health-content" class="agent-health-content" data-i18n="agentLoading">Loading agent health...</div>
+      </section>
+
+      <section class="agent-panel approvals-panel" id="approvals-panel" aria-label="Approvals">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow" data-i18n="approvalsEyebrow">Human Approval</p>
+            <h2 data-i18n="approvalsTitle">Pending Approvals <span id="approvals-badge" class="status-badge">0</span></h2>
+          </div>
+          <button type="button" id="approvals-refresh" class="inline-button" data-i18n="approvalsRefresh">Refresh</button>
+        </div>
+        <div id="approvals-content" class="approvals-content" data-i18n="approvalsLoading">Loading approvals...</div>
+      </section>
+
+      <section class="workbench">
+        <aside class="session-panel" aria-label="Session inventory">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow" data-i18n="inventoryEyebrow">会话总览</p>
+              <h2 data-i18n="inventoryTitle">Session Inventory</h2>
+            </div>
+            <span id="session-window">limit 50</span>
+          </div>
+          <div class="filter-row">
+            <input id="session-search" type="search" placeholder="搜索会话" data-i18n-placeholder="searchPlaceholder" />
+            <select id="risk-filter" aria-label="Risk filter">
+              <option value="all" data-i18n="filterAll">全部</option>
+              <option value="findings" data-i18n="filterFindings">有发现</option>
+              <option value="high" data-i18n="filterHigh">High+</option>
+              <option value="critical" data-i18n="filterCritical">Critical</option>
+            </select>
+          </div>
+          <div id="session-list" class="session-list">正在加载会话...</div>
+        </aside>
+
+        <section id="session-detail" class="detail-panel" aria-label="Selected session detail">
+          <div class="empty-state" data-i18n="emptySelect">选择一个会话以查看风险、时间线和资产清单。</div>
+        </section>
+      </section>
+
+      <template id="detail-template">
+        <div class="detail-header">
+          <div>
+            <p class="eyebrow" data-i18n="selectedSession">当前会话</p>
+            <h2 id="detail-session-id"></h2>
+          </div>
+          <div id="risk-summary" class="risk-card"></div>
+        </div>
+        <nav class="tab-list" id="detail-tabs" aria-label="Session detail tabs">
+          <button type="button" class="active" data-tab="timeline" data-i18n="tabTimeline">时间线</button>
+          <button type="button" data-tab="evidence" data-i18n="tabEvidence">证据</button>
+          <button type="button" data-tab="policy" data-i18n="tabPolicy">策略</button>
+          <button type="button" data-tab="bom" data-i18n="tabBom">BOM</button>
+        </nav>
+        <section class="detail-section tab-panel active" data-panel="timeline">
+          <div class="section-heading">
+            <h3 data-i18n="timelineTitle">执行时间线</h3>
+            <span data-i18n="timelineHint">最近 12 条工具调用</span>
+          </div>
+          <div class="inline-filter">
+            <label for="capability-filter" data-i18n="capabilityFilter">能力筛选</label>
+            <select id="capability-filter"></select>
+          </div>
+          <ol id="timeline" class="timeline"></ol>
+          <div id="event-detail" class="event-detail"></div>
+        </section>
+        <section class="detail-section tab-panel" data-panel="evidence">
+          <div class="section-heading">
+            <h3 data-i18n="evidenceTitle">风险证据</h3>
+            <span data-i18n="evidenceHint">Finding 证据链</span>
+          </div>
+          <div class="inline-filter">
+            <label for="rule-filter" data-i18n="ruleFilter">规则筛选</label>
+            <select id="rule-filter"></select>
+          </div>
+          <div id="evidence" class="evidence-list"></div>
+          <div id="evidence-detail" class="evidence-detail"></div>
+        </section>
+        <section class="detail-section tab-panel" data-panel="policy">
+          <div class="section-heading">
+            <h3 data-i18n="policyTitle">策略决策</h3>
+            <span data-i18n="policyHint">Policy decision history</span>
+          </div>
+          <div class="inline-filter">
+            <label for="decision-filter" data-i18n="decisionFilter">动作筛选</label>
+            <select id="decision-filter"></select>
+          </div>
+          <div class="section-heading compact-heading">
+            <h3 data-i18n="llmAdjudicationTitle">LLM 在线研判</h3>
+            <span data-i18n="llmAdjudicationHint">Shadow / Enforce history</span>
+          </div>
+          <div id="llm-adjudication-history" class="llm-adjudication-history"></div>
+          <div id="policy-history" class="policy-history"></div>
+        </section>
+        <section class="detail-section tab-panel" data-panel="bom">
+          <div class="section-heading">
+            <h3 data-i18n="bomTitle">Agent-BOM</h3>
+            <span data-i18n="bomHint">只读 JSON</span>
+          </div>
+          <pre id="bom-panel" class="code-panel"></pre>
+        </section>
+        <section class="detail-section">
+          <div class="section-heading">
+            <h3 data-i18n="inventoryDetailTitle">资产清单</h3>
+            <span data-i18n="inventoryDetailHint">能力、工具、服务与进程</span>
+          </div>
+          <div id="inventory" class="inventory-grid"></div>
+        </section>
+      </template>
+    </main>
+    <dialog id="llm-settings-dialog" class="settings-dialog" aria-labelledby="llm-settings-title">
+      <form id="llm-settings-form" class="settings-form">
+        <div class="settings-header">
+          <div>
+            <p class="eyebrow" data-i18n="llmSettingsEyebrow">模型服务</p>
+            <h2 id="llm-settings-title" data-i18n="llmSettingsTitle">大模型设置</h2>
+          </div>
+          <button type="button" id="llm-settings-close" class="icon-button" aria-label="Close" title="Close">×</button>
+        </div>
+        <p class="settings-description" data-i18n="llmSettingsDescription">
+          配置 OpenAI-compatible Chat Completions 服务。密钥仅保存在本机。
+        </p>
+        <div id="llm-environment-warning" class="settings-notice" hidden></div>
+        <div class="settings-grid">
+          <label class="settings-field settings-field-wide">
+            <span data-i18n="llmBaseUrl">Base URL</span>
+            <input id="llm-base-url" name="base_url" type="url" required autocomplete="url" />
+          </label>
+          <label class="settings-field settings-field-wide">
+            <span data-i18n="llmModel">模型</span>
+            <input id="llm-model" name="model" type="text" required autocomplete="off" />
+          </label>
+          <label class="settings-field settings-field-wide">
+            <span data-i18n="llmApiKey">API Key</span>
+            <input id="llm-api-key" name="api_key" type="password" autocomplete="new-password" />
+            <small id="llm-key-hint" class="field-hint"></small>
+          </label>
+          <label class="settings-field">
+            <span data-i18n="llmLanguage">默认语言</span>
+            <select id="llm-language" name="language">
+              <option value="zh">中文</option>
+              <option value="en">English</option>
+            </select>
+          </label>
+          <label class="settings-field">
+            <span data-i18n="llmTimeout">超时（秒）</span>
+            <input id="llm-timeout" name="timeout" type="number" min="1" step="1" required />
+          </label>
+          <label class="settings-field">
+            <span data-i18n="llmMaxTokens">最大输出 Tokens</span>
+            <input id="llm-max-output-tokens" name="max_output_tokens" type="number" min="1" step="1" required />
+          </label>
+          <div class="settings-subheading settings-field-wide">
+            <strong data-i18n="llmGateTitle">在线 Adjudication Gate</strong>
+            <span data-i18n="llmGateHint">留空模型时复用完整研判模型</span>
+          </div>
+          <label class="settings-field settings-field-wide">
+            <span data-i18n="llmGateModel">Gate 模型</span>
+            <input id="llm-gate-model" name="gate_model" type="text" autocomplete="off" />
+          </label>
+          <label class="settings-field">
+            <span data-i18n="llmGateTimeout">Gate 超时（秒）</span>
+            <input id="llm-gate-timeout" name="gate_timeout" type="number" min="1" step="1" required />
+          </label>
+          <label class="settings-field">
+            <span data-i18n="llmGateMaxTokens">Gate 最大输出 Tokens</span>
+            <input id="llm-gate-max-output-tokens" name="gate_max_output_tokens" type="number" min="1" step="1" required />
+          </label>
+          <section class="gate-metrics-panel settings-field-wide" aria-labelledby="llm-gate-metrics-title">
+            <div class="settings-subheading gate-metrics-heading">
+              <strong id="llm-gate-metrics-title" data-i18n="llmGateMetricsTitle">Gate 运行指标</strong>
+              <span data-i18n="llmGateMetricsHint">全库 Shadow / Enforce 汇总</span>
+            </div>
+            <div id="llm-gate-metrics" class="gate-metrics-grid"></div>
+          </section>
+        </div>
+        <div id="llm-config-source" class="config-source"></div>
+        <div id="llm-settings-status" class="settings-status" role="status" aria-live="polite"></div>
+        <div class="settings-actions">
+          <button type="button" id="llm-clear-key" class="danger-button" data-i18n="llmClearKey">清除密钥</button>
+          <span class="settings-action-spacer"></span>
+          <button type="button" id="llm-test-triage" class="secondary-button" data-i18n="llmTestTriage">测试完整研判</button>
+          <button type="button" id="llm-test-gate" class="secondary-button" data-i18n="llmTestGate">测试 Gate</button>
+          <button type="button" id="llm-save-test" class="secondary-button" data-i18n="llmSaveTest">保存并测试</button>
+          <button type="submit" id="llm-save" class="primary-button" data-i18n="llmSave">保存</button>
+        </div>
+      </form>
+    </dialog>
+    <script src="/console/assets/console.js"></script>
+  </body>
+</html>

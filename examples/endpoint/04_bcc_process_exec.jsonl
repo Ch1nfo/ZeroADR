@@ -1,0 +1,1 @@
+{"command": "/usr/bin/python3 worker.py", "event_id": "bcc_exec_example_001", "event_type": "process_exec", "executable": "/usr/bin/python3", "host_id": "host_bcc", "pid": 1234, "ppid": 1000, "process": "python3", "schema_version": "0.1", "session_id": "sess_bcc_example", "timestamp": "2026-06-26T00:00:00Z"}

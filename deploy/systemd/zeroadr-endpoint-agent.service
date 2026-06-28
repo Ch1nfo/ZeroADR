@@ -1,0 +1,22 @@
+[Unit]
+Description=ZeroADR Endpoint Agent
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/zeroadr
+Environment=PYTHONPATH=src
+ExecStart=/usr/bin/python3 -m zeroadr.cli.main endpoint agent \
+  --collector mock \
+  --output .zeroadr/endpoint-agent.jsonl \
+  --status-file .zeroadr/endpoint-agent-status.json \
+  --pid-file .zeroadr/endpoint-agent.pid \
+  --trace .zeroadr/traces/endpoint-agent.jsonl \
+  --db .zeroadr/zeroadr.sqlite \
+  --strict-ingest \
+  --heartbeat-interval 5
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

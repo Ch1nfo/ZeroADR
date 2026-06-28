@@ -1,0 +1,20 @@
+mode: audit
+policies:
+  - id: approve-env-read
+    match:
+      rule_id: sensitive-file-access
+      target: .env
+    action: require_approval
+
+  - id: approve-dangerous-shell
+    match:
+      rule_id: dangerous-shell-execution
+      severity: critical
+    action: require_approval
+
+  - id: block-private-keys
+    match:
+      rule_id: sensitive-file-access
+      severity: critical
+      capability: filesystem.read
+    action: block

@@ -1,0 +1,1 @@
+"""Generic hook input support."""

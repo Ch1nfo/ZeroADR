@@ -1,0 +1,122 @@
+# Operating systems
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+
+# Editors and local workspace state
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+/docs
+
+
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.tox/
+.nox/
+.ipynb_checkpoints/
+
+# Virtual environments and machine-local Python selection
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Coverage, test reports, and profiling output
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+junit.xml
+*.prof
+
+# Packaging and build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+pip-wheel-metadata/
+
+# Tests are local-only by project policy, including companion tests_local/
+tests_local/
+
+# ZeroADR private runtime, LLM, approval, Endpoint, and evaluation state
+.zeroadr/
+
+# Local databases and process state
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.log
+*.log.*
+logs/
+*.pid
+*.sock
+
+# Generated JSONL traces, caches, labels, and evaluation records
+*.jsonl
+*.jsonl.*
+
+# Public deterministic fixtures intentionally shipped with the repository
+!examples/**/*.jsonl
+
+# Environment files and local application secrets
+.env
+.env.*
+*.env
+*.secret
+*.secrets
+*.token
+
+# Private keys, certificate containers, and keystores
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+
+# Credential and authentication files
+credentials.json
+*credentials*.json
+service-account*.json
+service_account*.json
+client_secret*.json
+secrets.json
+secrets.*.json
+token.json
+tokens.json
+auth.json
+.npmrc
+.pypirc
+kubeconfig
+*.kubeconfig
+
+# Cloud and infrastructure local state
+.aws/
+.azure/
+.config/gcloud/
+.kube/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json

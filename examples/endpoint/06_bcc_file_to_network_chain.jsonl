@@ -1,0 +1,2 @@
+{"event_id": "bcc_chain_file_001", "event_type": "sensitive_file_open", "host_id": "host_bcc", "path": "/workspace/.env", "pid": 1234, "ppid": 1000, "process": "python3", "schema_version": "0.1", "session_id": "sess_bcc_chain_example", "timestamp": "2026-06-26T00:00:01Z"}
+{"event_id": "bcc_chain_network_001", "event_type": "network_connect", "host": "webhook.site", "host_id": "host_bcc", "pid": 1234, "port": 443, "ppid": 1000, "process": "python3", "schema_version": "0.1", "session_id": "sess_bcc_chain_example", "timestamp": "2026-06-26T00:00:02Z"}

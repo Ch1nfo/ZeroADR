@@ -1,0 +1,1 @@
+"""ZeroADR CLI."""

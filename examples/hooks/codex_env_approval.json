@@ -1,0 +1,11 @@
+{
+  "event": "pre_tool_use",
+  "session_id": "sess_hook_v02_codex",
+  "call_id": "codex_env_approval",
+  "tool": {
+    "name": "read_file",
+    "arguments": {
+      "path": ".env"
+    }
+  }
+}

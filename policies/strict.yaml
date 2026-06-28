@@ -1,0 +1,28 @@
+mode: audit
+policies:
+  - id: block-private-keys
+    match:
+      rule_id: sensitive-file-access
+      severity: critical
+      capability: filesystem.read
+    action: block
+
+  - id: block-exfiltration
+    match:
+      rule_id: external-data-exfiltration
+    action: block
+
+  - id: alert-injection-chain
+    match:
+      rule_id: injection-to-action-chain
+    action: alert
+
+  - id: block-aws-credentials-target
+    match:
+      target_contains: ~/.aws/credentials
+    action: block
+
+  - id: block-ssh-private-key-target
+    match:
+      target_contains: ~/.ssh/id_rsa
+    action: block
