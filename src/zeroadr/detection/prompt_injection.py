@@ -6,12 +6,35 @@ from zeroadr.core.events import RuntimeEvent
 from zeroadr.core.findings import Finding, Severity, new_finding
 
 
+MAX_EVIDENCE_CHARS = 16_384
+MAX_EVIDENCE_DEPTH = 32
+MAX_EVIDENCE_NODES = 4_096
+
 HIGH_PATTERNS = (
     "ignore previous instructions",
     "disregard prior instructions",
     "do not tell the user",
     "忽略之前的指令",
     "不要告诉用户",
+    # Stealthy variants
+    "forget your earlier instructions",
+    "override your guidelines",
+    "your new priority is",
+    "instead of what you were told",
+    "before proceeding with",
+    "first you must",
+    "actually you should",
+    # Disruptive variants
+    "abandon your task",
+    "stop following",
+    "change your objective to",
+    "your real purpose is",
+    "disregard the user request",
+    # Indirect/implicit
+    "new instruction:",
+    "system update:",
+    "priority override:",
+    "special directive:",
 )
 CRITICAL_PATTERNS = (
     "read ~/.ssh/id_rsa",
@@ -20,6 +43,20 @@ CRITICAL_PATTERNS = (
     "exfiltrate",
     "读取私钥",
     "读取凭证",
+    # Data exfiltration
+    "send credentials to",
+    "upload password to",
+    "leak sensitive data",
+    "transmit private information",
+    # Stealth operations
+    "hide this action",
+    "conceal from user",
+    "do not log this",
+    "suppress the output",
+    # Tool abuse
+    "use the tool to access",
+    "invoke the tool for",
+    "call the function with",
 )
 COMPOUND_CRITICAL_PATTERNS = (
     (
@@ -71,8 +108,23 @@ class PromptInjectionDetector:
 
 def extract_result_text(value: Any) -> str:
     parts: list[str] = []
-    _collect_text(value, parts, depth=0)
-    return "\n".join(parts)
+    remaining = MAX_EVIDENCE_CHARS
+    nodes = 0
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    while stack and remaining > 0 and nodes < MAX_EVIDENCE_NODES:
+        item, depth = stack.pop()
+        nodes += 1
+        if depth > MAX_EVIDENCE_DEPTH:
+            continue
+        if isinstance(item, str):
+            chunk = item[:remaining]
+            parts.append(chunk)
+            remaining -= len(chunk)
+        elif isinstance(item, list):
+            stack.extend((child, depth + 1) for child in reversed(item))
+        elif isinstance(item, dict):
+            stack.extend((child, depth + 1) for child in reversed(tuple(item.values())))
+    return "\n".join(parts)[:MAX_EVIDENCE_CHARS]
 
 
 def classify_prompt_injection(text: str) -> tuple[Severity, str] | None:
@@ -88,20 +140,3 @@ def classify_prompt_injection(text: str) -> tuple[Severity, str] | None:
         if " ".join(phrase.lower().split()) in normalized:
             return "high", phrase
     return None
-
-
-def _collect_text(value: Any, parts: list[str], depth: int) -> None:
-    # Limit recursion depth to prevent stack overflow from malicious nested structures
-    if depth > 100:
-        return
-
-    if isinstance(value, str):
-        parts.append(value)
-        return
-    if isinstance(value, list):
-        for item in value:
-            _collect_text(item, parts, depth + 1)
-        return
-    if isinstance(value, dict):
-        for item in value.values():
-            _collect_text(item, parts, depth + 1)
