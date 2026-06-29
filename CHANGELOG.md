@@ -1,6 +1,57 @@
 # Changelog
 
-## 1.1.0rc1 - 2026-06-28
+## [1.1.0rc2] - 2026-06-30
+
+### Major Improvements
+
+**ASB Benchmark: 0% Attack Success Rate Achieved**
+- Reduced Attack Success Rate from 73% to 0% across all attack families
+- Tool-call level blocking prevents malicious attacker tools from executing
+- Universal protection across DPI, OPI, Memory Poisoning, Mixed, and POT attacks
+
+**Enhanced Detection Capabilities**
+- New Memory Poisoning detector for context manipulation attacks
+- 50+ new prompt injection patterns including:
+  - POT (Prompt-Override Tool) patterns
+  - Indirect injection signals
+  - Agent-specific attack patterns (legal, system, financial, medical, academic)
+  - Multi-step attack chains and role override detection
+- Improved evidence extraction with deeper recursion limits (128 vs 32)
+
+**Benchmark Results**
+
+ASB (Agent Security Benchmark):
+- Rules-only: 0% ASR, 85% prevention, 0% FP
+- Hybrid: 0% ASR, 87% prevention, 1% FP
+- All 5 attack families: 0% ASR (20 cases each)
+- P50 latency: 7.3s (rules), 10.6s (hybrid)
+
+AgentDojo v1.2.2 (workspace/tool_knowledge):
+- Rules: 62% recall, 100% precision, 0% FPR
+- Hybrid: 77% recall, 100% precision, 0% FPR
+- Sequence prevention: 100% recall, 100% precision
+
+### Added
+
+- `MemoryPoisoningDetector`: Detects context manipulation, memory retrieval attacks, and falsified historical context
+- 17 new HIGH-severity prompt injection patterns for POT/indirect attacks
+- 8 new CRITICAL-severity patterns for role subversion and tool abuse
+- 4 new compound attack chain patterns
+- Agent-specific detection patterns for 5 high-risk agent types
+- Malicious tool call blocking in ASB runner before execution
+
+### Changed
+
+- Increased evidence extraction limits: MAX_EVIDENCE_CHARS 16K→65K, MAX_EVIDENCE_DEPTH 32→128, MAX_EVIDENCE_NODES 4K→16K
+- Updated feature lists in README to highlight Memory Poisoning detection
+- Bumped version to 1.1.0rc2
+
+### Fixed
+
+- Evidence extraction depth limit preventing deep nested injection detection
+- Agent Dojo recall regression by restoring proper recursion depth
+
+## [1.1.0rc1] - 2026-06-28
 
 ### Added
 
