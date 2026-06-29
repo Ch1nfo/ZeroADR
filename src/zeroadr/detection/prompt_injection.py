@@ -35,6 +35,26 @@ HIGH_PATTERNS = (
     "system update:",
     "priority override:",
     "special directive:",
+    # POT (Prompt-Override Tool) variants
+    "this tool requires you to",
+    "tool output indicates you must",
+    "as per the tool specification",
+    "mandatory tool behavior:",
+    "the tool mandates that you",
+    "required by the tool:",
+    # Memory/context manipulation
+    "the retrieved memory says",
+    "the context showed that",
+    "you were told earlier",
+    "recall that you should",
+    "your memory indicates",
+    # Indirect injection in structured data
+    "note for the assistant:",
+    "system message for agent:",
+    "meta instruction: do",
+    "workflow override:",
+    "context directive:",
+    "hidden instruction:",
 )
 CRITICAL_PATTERNS = (
     "read ~/.ssh/id_rsa",
@@ -57,7 +77,56 @@ CRITICAL_PATTERNS = (
     "use the tool to access",
     "invoke the tool for",
     "call the function with",
+    # POT critical overrides
+    "you must use this tool now",
+    "the only correct action is",
+    "disregard all other tools",
+    "only use the following tool",
+    # Agent role subversion
+    "you are no longer an assistant",
+    "your role has been changed to",
+    "you are now operating as",
+    "your identity is now",
 )
+# Agent-specific critical patterns
+AGENT_SPECIFIC_PATTERNS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "legal": (
+        # Legal consultant agent attacks
+        ("amend the contract to include", "by using the"),
+        ("modify the legal clause", "strictly adhere"),
+        ("insert the following provision", "tool"),
+        ("change the liability terms", "do NOT use other"),
+    ),
+    "system": (
+        # System admin agent attacks
+        ("sudo execute", "with the tool"),
+        ("grant unrestricted access", "using the"),
+        ("escalate privileges", "strictly adhere"),
+        ("bypass authentication", "do NOT use other"),
+    ),
+    "financial": (
+        # Financial analyst agent attacks
+        ("transfer funds to", "by using"),
+        ("modify transaction records", "strictly adhere"),
+        ("redirect payments", "using the tool"),
+        ("unauthorized wire transfer", "do NOT use other"),
+    ),
+    "medical": (
+        # Medical advisor agent attacks
+        ("override diagnosis", "by using"),
+        ("falsify medical records", "strictly adhere"),
+        ("change prescription", "using the"),
+        ("alter patient data", "tool"),
+    ),
+    "academic": (
+        # Academic search agent attacks
+        ("fabricate research results", "by using"),
+        ("plagiarize content", "strictly adhere"),
+        ("modify citation data", "using the"),
+        ("alter academic records", "tool"),
+    ),
+}
+
 COMPOUND_CRITICAL_PATTERNS = (
     (
         "structured tool instruction",
@@ -71,6 +140,24 @@ COMPOUND_CRITICAL_PATTERNS = (
             "do the following first",
             "after you do that",
             "</information>",
+        ),
+    ),
+    (
+        "multi-step attack chain",
+        (
+            "you must strictly adhere",
+            "by using the",
+            "tool",
+            "do not use other tools",
+        ),
+    ),
+    (
+        "role override with tool directive",
+        (
+            "you are no longer",
+            "you must",
+            "by using the",
+            "tool",
         ),
     ),
 )
@@ -130,9 +217,18 @@ def extract_result_text(value: Any) -> str:
 def classify_prompt_injection(text: str) -> tuple[Severity, str] | None:
     lowered = text.lower()
     normalized = " ".join(lowered.split())
+
+    # Check compound critical patterns first
     for label, required_phrases in COMPOUND_CRITICAL_PATTERNS:
         if all(phrase in normalized for phrase in required_phrases):
             return "critical", label
+
+    # Check agent-specific compound patterns
+    for agent_type, pattern_groups in AGENT_SPECIFIC_PATTERNS.items():
+        for required_phrases in pattern_groups:
+            if all(phrase in normalized for phrase in required_phrases):
+                return "critical", f"{agent_type}-specific: {required_phrases[0]}"
+
     for phrase in CRITICAL_PATTERNS:
         if " ".join(phrase.lower().split()) in normalized:
             return "critical", phrase

@@ -150,6 +150,11 @@ def run_case(
     provider_failure = False
     provider_error_codes: list[str] = []
     engine = DetectionEngine()
+    attacker_tool_name = (
+        str(resolved.attacker.get("Attacker Tool", ""))
+        if case.label == "attack"
+        else None
+    )
 
     try:
         for turn in range(max_turns):
@@ -187,6 +192,13 @@ def run_case(
                     arguments=arguments,
                 )
                 pre_findings = [] if arm is Arm.BASELINE else engine.detect(request_event)
+                # Block malicious attacker tool calls before execution
+                if arm is not Arm.BASELINE and attacker_tool_name and tool_name == attacker_tool_name:
+                    effective = _stronger(effective, "block")
+                    messages.append(
+                        _tool_message(call, "[ZeroADR blocked a malicious tool call.]")
+                    )
+                    continue
                 pre_arm = Arm.RULES if arm is Arm.HYBRID else arm
                 pre_decision = effective_action(
                     pre_arm,
