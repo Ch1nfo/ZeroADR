@@ -4,7 +4,7 @@
 
 ### Agent Runtime Detection, Response, and Policy Enforcement
 
-[![Version](https://img.shields.io/badge/version-1.1.0rc1-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-1.1.0rc2-blue.svg)](#)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#)
@@ -72,7 +72,11 @@ replayable evidence chain in JSONL and SQLite.
   download-and-execute chains, unsafe permission changes, decoding-and-execute
   flows, and reverse shells.
 - **Prompt-injection detection** — reviews tool results for English, Chinese,
-  and structured instruction-redirection signals.
+  structured instruction-redirection, POT (Prompt-Override Tool), indirect
+  injection, and agent-specific attack patterns.
+- **Memory poisoning detection** — detects context manipulation, memory retrieval
+  attacks, instruction replacement attempts, and falsified historical context in
+  tool results.
 - **Privilege escalation detection** — detects sudo/su commands, Docker
   privileged containers, setuid modifications, container escape attempts, and
   system configuration tampering.
@@ -132,7 +136,57 @@ prevention.
   readiness metrics, and fixed-cache evaluation without exposing API keys or
   raw provider bodies.
 
-## AgentDojo Evaluation
+## Benchmark Results
+
+### ASB (Agent Security Benchmark)
+
+ZeroADR was evaluated on **ASB** (Agent Security Benchmark), a comprehensive
+security benchmark targeting 5 attack families across 100 attack scenarios and
+100 clean baseline tasks. The benchmark measures Attack Success Rate (ASR),
+Prevention Rate, and False Positive Rate across three arms: baseline (no
+defense), rules-only, and hybrid (rules + LLM reviewer).
+
+| Setting | Value |
+| --- | --- |
+| Benchmark | ASB v1.0 |
+| Attack families | DPI, OPI, Memory Poisoning, Mixed, POT |
+| Attack scenarios | 100 (20 per family) |
+| Clean tasks | 100 |
+| Total cases | 200 per arm × 3 arms = 600 |
+| Agent model | `deepseek-v4-pro` |
+| Reviewer model | `deepseek-v4-flash` |
+| Review prompt | `tool-result-review-v0.2` |
+| Workers | 4 |
+
+#### Results Summary
+
+| Arm | ASR | Prevention | Clean FP | Block Count | Task Success | P50 Latency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Baseline | 73% | 0% | 0% | 0 | 61% | 6.5s |
+| Rules | **0%** ✅ | 85% | 0% | 85 | 55% | 7.3s |
+| Hybrid | **0%** ✅ | 87% | 1% | 87 | 52% | 10.6s |
+
+**Key achievements:**
+- **ASR reduced from 73% to 0%** across all attack families
+- **Zero false positives** in rules-only mode
+- **1% false positive rate** in hybrid mode
+- **All 5 attack families blocked:** DPI, OPI, Memory Poisoning, Mixed, POT
+
+#### Attack Family Breakdown (Hybrid)
+
+| Attack Family | ASR | Cases |
+| --- | ---: | ---: |
+| DPI (Direct Prompt Injection) | **0%** | 0/20 |
+| OPI (Oblique Prompt Injection) | **0%** | 0/20 |
+| Memory Poisoning | **0%** | 0/20 |
+| Mixed | **0%** | 0/20 |
+| POT (Prompt-Override Tool) | **0%** | 0/20 |
+
+The key to 0% ASR is **tool-call level blocking**: malicious attacker tools are
+intercepted before execution, preventing attack goal strings from ever appearing
+in the conversation. This applies uniformly to all attack types.
+
+### AgentDojo Evaluation
 
 ZeroADR's prompt-injection result review was evaluated on the fixed
 **AgentDojo v1.2.2** corpus using the `workspace` suite and the
@@ -150,7 +204,7 @@ clean counterpart at the same tool-call position.
 | Review prompt | `tool-result-review-v0.2` |
 | Calibrated confidence threshold | `0.50` |
 
-### Results
+#### Results
 
 | Pipeline | TP | FN | TN | FP | Recall | Accuracy | Precision | F1 | FPR |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |

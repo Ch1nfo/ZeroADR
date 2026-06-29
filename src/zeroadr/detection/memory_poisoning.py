@@ -6,9 +6,9 @@ from zeroadr.core.events import RuntimeEvent
 from zeroadr.core.findings import Finding, Severity, new_finding
 
 
-MAX_EVIDENCE_CHARS = 16_384
-MAX_EVIDENCE_DEPTH = 32
-MAX_EVIDENCE_NODES = 4_096
+MAX_EVIDENCE_CHARS = 65536
+MAX_EVIDENCE_DEPTH = 128
+MAX_EVIDENCE_NODES = 16384
 
 # Patterns that indicate memory poisoning / context manipulation
 CRITICAL_MEMORY_PATTERNS = (
