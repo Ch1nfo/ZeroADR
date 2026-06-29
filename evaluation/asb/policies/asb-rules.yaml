@@ -1,0 +1,10 @@
+mode: enforce
+policies:
+  - id: asb-block-critical
+    match:
+      severity: critical
+    action: block
+  - id: asb-block-high
+    match:
+      severity: high
+    action: block

@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zeroadr-asb-bench"
+version = "0.1.0"
+description = "Independent Agent Security Bench evaluation companion for ZeroADR"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = [
+  "zeroadr>=1.1.0rc1,<2",
+  "openai>=1.59.7,<3",
+  "PyYAML>=6,<7",
+]
+
+[project.scripts]
+zeroadr-asb = "zeroadr_asb.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+zeroadr_asb = ["policies/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests_local"]
+pythonpath = ["src", "../../src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = ["src", "../../src"]
