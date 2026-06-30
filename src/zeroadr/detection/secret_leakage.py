@@ -107,6 +107,10 @@ SECRET_PATTERNS = {
     ),
 }
 
+MAX_EXTRACT_CHARS = 16_384
+MAX_EXTRACT_DEPTH = 32
+MAX_EXTRACT_NODES = 4_096
+
 
 class SecretLeakageDetector:
     rule_id = "secret-leakage"
@@ -137,7 +141,7 @@ class SecretLeakageDetector:
                 )
 
         # Check tool arguments (for tool.call.requested)
-        if event.arguments:
+        if event.event_type == "tool.call.requested" and event.arguments:
             text = extract_text(event.arguments)
             secrets = detect_secrets(text)
             for secret_type, secret_name, match in secrets:
@@ -162,22 +166,25 @@ class SecretLeakageDetector:
 
 
 def extract_text(value: Any, depth: int = 0) -> str:
-    """Extract all text content from nested structures"""
-    if depth > 100:
-        return ""
-
+    """Extract bounded text content from nested structures."""
     parts: list[str] = []
-
-    if isinstance(value, str):
-        parts.append(value)
-    elif isinstance(value, list):
-        for item in value:
-            parts.append(extract_text(item, depth + 1))
-    elif isinstance(value, dict):
-        for item in value.values():
-            parts.append(extract_text(item, depth + 1))
-
-    return "\n".join(parts)
+    remaining = MAX_EXTRACT_CHARS
+    nodes = 0
+    stack: list[tuple[Any, int]] = [(value, depth)]
+    while stack and remaining > 0 and nodes < MAX_EXTRACT_NODES:
+        item, item_depth = stack.pop()
+        nodes += 1
+        if item_depth > MAX_EXTRACT_DEPTH:
+            continue
+        if isinstance(item, str):
+            chunk = item[:remaining]
+            parts.append(chunk)
+            remaining -= len(chunk)
+        elif isinstance(item, list):
+            stack.extend((child, item_depth + 1) for child in reversed(item))
+        elif isinstance(item, dict):
+            stack.extend((child, item_depth + 1) for child in reversed(tuple(item.values())))
+    return "\n".join(parts)[:MAX_EXTRACT_CHARS]
 
 
 def detect_secrets(text: str) -> list[tuple[str, str, str]]:
@@ -192,6 +199,11 @@ def detect_secrets(text: str) -> list[tuple[str, str, str]]:
         for match in matches:
             matched_string = match.group(0)
 
+            if secret_type == "heroku_api" and not _has_heroku_key_context(
+                text, match.start(), match.end()
+            ):
+                continue
+
             # Skip common false positives
             if _is_false_positive(secret_type, matched_string):
                 continue
@@ -199,6 +211,11 @@ def detect_secrets(text: str) -> list[tuple[str, str, str]]:
             secrets.append((secret_type, name, matched_string))
 
     return secrets
+
+
+def _has_heroku_key_context(text: str, start: int, end: int) -> bool:
+    window = text[max(0, start - 64) : min(len(text), end + 64)].lower()
+    return "heroku" in window and any(word in window for word in ("api", "key", "token"))
 
 
 def _is_false_positive(secret_type: str, matched_string: str) -> bool:

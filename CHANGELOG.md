@@ -2,54 +2,37 @@
 
 ## [1.1.0rc2] - 2026-06-30
 
-### Major Improvements
+### Benchmark correction
 
-**ASB Benchmark: 0% Attack Success Rate Achieved**
-- Reduced Attack Success Rate from 73% to 0% across all attack families
-- Tool-call level blocking prevents malicious attacker tools from executing
-- Universal protection across DPI, OPI, Memory Poisoning, Mixed, and POT attacks
-
-**Enhanced Detection Capabilities**
-- New Memory Poisoning detector for context manipulation attacks
-- 50+ new prompt injection patterns including:
-  - POT (Prompt-Override Tool) patterns
-  - Indirect injection signals
-  - Agent-specific attack patterns (legal, system, financial, medical, academic)
-  - Multi-step attack chains and role override detection
-- Improved evidence extraction with deeper recursion limits (128 vs 32)
-
-**Benchmark Results**
-
-ASB (Agent Security Benchmark):
-- Rules-only: 0% ASR, 85% prevention, 0% FP
-- Hybrid: 0% ASR, 87% prevention, 1% FP
-- All 5 attack families: 0% ASR (20 cases each)
-- P50 latency: 7.3s (rules), 10.6s (hybrid)
-
-AgentDojo v1.2.2 (workspace/tool_knowledge):
-- Rules: 62% recall, 100% precision, 0% FPR
-- Hybrid: 77% recall, 100% precision, 0% FPR
-- Sequence prevention: 100% recall, 100% precision
+- The previously published ASB claim of 0% ASR is withdrawn. That run used a
+  simplified loop and an attacker-tool ground-truth shortcut, so it did not
+  measure the production-visible ZeroADR decision boundary.
+- The corrected evaluation runs the pinned official ASB `ReactAgentAttack`,
+  workflow generation, simulated tools, and attacker-goal evaluator.
+- Corrected primary 100-attack results: Baseline 67% ASR, Rules 60%, Hybrid
+  40%; clean FPR is 0% for Rules and 2% for Hybrid. A second provider-clean
+  replication measured 67%/55%/29%, documenting material model-run variance.
+- Provider failures and workflow failures are both zero. Two cache-only replays
+  made zero model calls and reproduced the same analysis SHA-256.
 
 ### Added
 
-- `MemoryPoisoningDetector`: Detects context manipulation, memory retrieval attacks, and falsified historical context
-- 17 new HIGH-severity prompt injection patterns for POT/indirect attacks
-- 8 new CRITICAL-severity patterns for role subversion and tool abuse
-- 4 new compound attack chain patterns
-- Agent-specific detection patterns for 5 high-risk agent types
-- Malicious tool call blocking in ASB runner before execution
-
-### Changed
-
-- Increased evidence extraction limits: MAX_EVIDENCE_CHARS 16K→65K, MAX_EVIDENCE_DEPTH 32→128, MAX_EVIDENCE_NODES 4K→16K
-- Updated feature lists in README to highlight Memory Poisoning detection
-- Bumped version to 1.1.0rc2
+- Independent ASB companion with official-agent instrumentation for pre-tool
+  and tool-result gates without exposing labels or expected attacker tools to
+  ZeroADR.
+- Stable paired manifest, deterministic direct-hit memory evaluation,
+  append-only private cache, concurrency sweep, and stage-level telemetry.
+- Memory Poisoning detector and additional prompt-injection compound signals.
 
 ### Fixed
 
-- Evidence extraction depth limit preventing deep nested injection detection
-- Agent Dojo recall regression by restoring proper recursion depth
+- Plain UUID values no longer trigger the Heroku API-key detector without
+  explicit Heroku key context.
+- Completed events inspect result evidence without rescanning request arguments.
+- Recursive evidence extraction is bounded to 16 KiB with depth and node
+  budgets.
+- Flash reasoning-model runs use sufficient output budget and reusable clients,
+  eliminating truncation-driven retry storms.
 
 ## [1.1.0rc1] - 2026-06-28
 
@@ -77,24 +60,11 @@ AgentDojo v1.2.2 (workspace/tool_knowledge):
 
 ### Added
 
-- Local-first MCP gateway, hooks, approvals, trace/replay, session evidence,
-  Agent-BOM, Console, LLM triage/gate, Endpoint agent, and Linux BCC collector.
-- Explicit release-candidate readiness and migration documentation.
+- MCP gateway, hooks, approvals, trace/replay, session evidence, Agent-BOM,
+  Console, LLM triage/gate, Endpoint agent, and Linux BCC collector.
 
 ### Changed
 
-- AgentDojo evaluation is now the independently buildable
+- AgentDojo evaluation is the independently buildable
   `zeroadr-agentdojo-bench` companion package.
 - Package version is sourced from `zeroadr.__version__`.
-- MCP proxy shutdown drains ordered responses before ending a server process.
-- Session-triage prompts request bounded, concise JSON to avoid truncated live
-  provider responses.
-
-### Removed
-
-- `zeroadr benchmark ...` and the `zeroadr[agentdojo]` optional dependency.
-
-### Release status
-
-- This is a release candidate. Final `1.0.0` requires the privileged Linux BCC
-  smoke on a supported Linux host.

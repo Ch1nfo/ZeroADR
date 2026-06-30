@@ -6,9 +6,9 @@ from zeroadr.core.events import RuntimeEvent
 from zeroadr.core.findings import Finding, Severity, new_finding
 
 
-MAX_EVIDENCE_CHARS = 65536
-MAX_EVIDENCE_DEPTH = 128
-MAX_EVIDENCE_NODES = 16384
+MAX_EVIDENCE_CHARS = 16_384
+MAX_EVIDENCE_DEPTH = 32
+MAX_EVIDENCE_NODES = 4_096
 
 HIGH_PATTERNS = (
     "ignore previous instructions",
@@ -204,7 +204,7 @@ def extract_result_text(value: Any) -> str:
         if depth > MAX_EVIDENCE_DEPTH:
             continue
         if isinstance(item, str):
-            chunk = item[:remaining]
+            chunk = _bounded_windows(item, remaining)
             parts.append(chunk)
             remaining -= len(chunk)
         elif isinstance(item, list):
@@ -212,6 +212,22 @@ def extract_result_text(value: Any) -> str:
         elif isinstance(item, dict):
             stack.extend((child, depth + 1) for child in reversed(tuple(item.values())))
     return "\n".join(parts)[:MAX_EVIDENCE_CHARS]
+
+
+def _bounded_windows(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    if limit < 5:
+        return value[:limit]
+    window = (limit - 2) // 3
+    middle_start = max(0, (len(value) - window) // 2)
+    return "\n".join(
+        (
+            value[:window],
+            value[middle_start : middle_start + window],
+            value[-window:],
+        )
+    )
 
 
 def classify_prompt_injection(text: str) -> tuple[Severity, str] | None:
@@ -225,9 +241,9 @@ def classify_prompt_injection(text: str) -> tuple[Severity, str] | None:
 
     # Check agent-specific compound patterns
     for agent_type, pattern_groups in AGENT_SPECIFIC_PATTERNS.items():
-        for required_phrases in pattern_groups:
-            if all(phrase in normalized for phrase in required_phrases):
-                return "critical", f"{agent_type}-specific: {required_phrases[0]}"
+        for agent_phrases in pattern_groups:
+            if all(phrase in normalized for phrase in agent_phrases):
+                return "critical", f"{agent_type}-specific: {agent_phrases[0]}"
 
     for phrase in CRITICAL_PATTERNS:
         if " ".join(phrase.lower().split()) in normalized:

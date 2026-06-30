@@ -2,13 +2,13 @@
 
 # ZeroADR
 
-### Agent Runtime Detection, Response, and Policy Enforcement
+### Runtime Detection, Response, and Policy Enforcement for AI Agents
 
-[![Version](https://img.shields.io/badge/version-1.1.0rc2-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-1.1.0rc2-blue.svg)](#current-release)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#)
-[![Runtime](https://img.shields.io/badge/runtime-MCP%20%7C%20Hooks%20%7C%20Endpoint-orange.svg)](#)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#support-boundary)
+[![Runtime](https://img.shields.io/badge/runtime-MCP%20%7C%20Hooks%20%7C%20Endpoint-orange.svg)](#core-capabilities)
 
 English | [中文](README_ZH.md)
 
@@ -16,195 +16,165 @@ English | [中文](README_ZH.md)
 
 ---
 
+ZeroADR (Zero Agentic Detection and Response) is an open-source runtime
+security platform for AI Agents. It observes and controls tool activity across
+MCP, agent Hooks, replayed traces, and Endpoint telemetry through one typed
+`RuntimeEvent` model.
+
+ZeroADR detects dangerous behavior, applies YAML policy, pauses selected
+actions for human approval, reviews untrusted MCP tool results before they
+return to the Agent, and preserves a redacted evidence chain in JSONL and
+SQLite. Deterministic controls work without an LLM; optional Hybrid review uses
+bounded, redacted evidence while ZeroADR retains ownership of the final action.
+
 ## Why ZeroADR?
 
-AI agents do more than generate text. They read files, execute shell commands,
-call MCP tools, send data to external services, and act across long-running
-sessions. Prompt filters see instructions, while endpoint security sees system
-effects. The missing control point is the agent runtime itself: which tool was
-called, what target it touched, what evidence led to the action, and whether
-the action matched policy before execution.
+AI Agents can read files, run commands, call tools, send data, and retain state
+across long sessions. Prompt filters inspect instructions, while endpoint tools
+inspect system effects. ZeroADR protects the missing runtime control point:
 
-**ZeroADR** (Zero Agentic Detection and Response) is an agent runtime security
-platform for that control layer. It normalizes MCP, Hook, replay, and Endpoint
-activity into a common `RuntimeEvent` model, detects risky behavior, applies
-policy actions, pauses selected operations for human approval, and preserves a
-replayable evidence chain in JSONL and SQLite.
-
-- **Runtime-aware enforcement** — inspect MCP requests and agent Hook events at
-  the point where tools are invoked.
-- **Deterministic security controls** — detect sensitive access, dangerous
-  commands, prompt injection, injection-to-action chains, and exfiltration.
-- **Human-in-the-loop decisions** — route uncertain or explicitly governed
-  actions to a local approval queue.
-- **Replayable evidence** — reconstruct sessions, export focused evidence, and
-  generate an Agent-BOM from persisted activity.
-- **Local operations** — use the read-only Web Console, endpoint health views,
-  and private local LLM configuration without introducing a hosted control
-  plane.
-- **LLM-assisted, policy-controlled review** — use bounded redacted evidence for
-  session triage or Hybrid Gate adjudication while ZeroADR retains final action
-  mapping.
+- which tool was requested and what capability it represents;
+- what target and arguments were involved;
+- what untrusted result was about to return to the Agent;
+- which evidence and policy produced the effective action;
+- how the session can be reconstructed and replayed afterward.
 
 ## Core Capabilities
 
-### Runtime Control
+### Runtime enforcement
 
 - **MCP stdio gateway** — proxies line-delimited and `Content-Length` framed
-  JSON-RPC, inspects `tools/call` requests and successful tool responses, and
-  returns protocol-safe block responses.
-- **Production Tool Result Gate** — holds MCP results before the Agent receives
-  them, applies rules or Hybrid LLM review, and supports shadow, block, and
-  result-stage approval flows without rewriting allowed content.
-- **Agent Hook adapters** — accepts Generic JSON, Claude Code, and Codex-style
-  pre-tool and post-tool events through one normalized decision path.
-- **Approval and resume** — persists `require_approval` requests in SQLite,
-  supports Console approve/deny operations, expires stale requests, and resumes
-  Hook or MCP execution with an audited effective action.
-- **Protocol isolation** — keeps diagnostics away from stdout so MCP framing and
-  Hook JSON responses remain valid.
+  JSON-RPC while preserving protocol-safe stdout.
+- **Production Tool Result Gate** — holds successful MCP tool results before
+  delivery, then applies rules, Hybrid review, blocking, or result-stage
+  approval.
+- **Agent Hook adapters** — normalizes Generic JSON, Claude Code, and Codex
+  pre-tool/post-tool events through a shared decision path.
+- **Human approval** — persists approval requests in SQLite, supports
+  approve/deny/expiry, and resumes Hook or MCP execution with an audited action.
+- **Ordered and bounded response handling** — preserves MCP response order and
+  enforces pending-response and memory limits.
 
-### Detection and Policy
+### Detection and policy
 
-- **Sensitive file detection** — covers environment files, SSH keys, AWS
-  credentials, kubeconfig, `.npmrc`, `.pypirc`, and related credential targets.
-- **Dangerous execution detection** — identifies destructive shell patterns,
-  download-and-execute chains, unsafe permission changes, decoding-and-execute
-  flows, and reverse shells.
-- **Prompt-injection detection** — reviews tool results for English, Chinese,
-  structured instruction-redirection, POT (Prompt-Override Tool), indirect
-  injection, and agent-specific attack patterns.
-- **Memory poisoning detection** — detects context manipulation, memory retrieval
-  attacks, instruction replacement attempts, and falsified historical context in
-  tool results.
-- **Privilege escalation detection** — detects sudo/su commands, Docker
-  privileged containers, setuid modifications, container escape attempts, and
-  system configuration tampering.
-- **Secret leakage detection** — identifies 20+ credential patterns including
-  AWS keys, OpenAI API keys, GitHub tokens, private keys, and other secrets in
-  tool results and arguments.
-- **Code injection detection** — catches code write-execute chains, dynamic code
-  evaluation (eval/exec), and download-and-execute patterns.
-- **Sequence detectors** — identify injection followed by sensitive access or
-  dangerous execution, sensitive reads followed by external transfer, and code
-  injection chains.
-- **Separated policy engine** — detectors describe risk; YAML policy maps that
-  evidence to `allow`, `alert`, `block`, or `require_approval`.
+- Sensitive files and credential targets
+- Dangerous shell and download-and-execute patterns
+- Prompt injection and indirect tool-result injection
+- Memory poisoning and falsified historical context
+- Secret leakage and private-key exposure
+- Privilege escalation and container escape attempts
+- Code injection and write-then-execute chains
+- Sensitive-read-to-exfiltration and injection-to-action sequences
+- Separate YAML policy mapping to `allow`, `alert`, `block`, or
+  `require_approval`
 
-### Evidence and Operations
+### Evidence and operations
 
-- **Open runtime schema** — represents sessions, tool requests, tool results,
-  failures, policy evaluations, approvals, and Endpoint observations through
-  typed records.
-- **JSONL and SQLite persistence** — stores sessions, events, findings,
-  decisions, approvals, LLM analyses, and Gate adjudications locally.
-- **Trace replay** — re-runs deterministic and sequence detection against saved
-  evidence without contacting an agent or model.
-- **Session reconstruction** — produces timelines, risk summaries, focused
-  evidence chains, process correlations, and Agent-BOM inventories.
-- **local Web Console** — provides session inventory, timeline inspection,
-  evidence, policy history, approval operations, Endpoint health, and LLM
-  configuration on a loopback-only server.
+- Typed runtime events, findings, decisions, approvals, and Gate records
+- Redacted JSONL traces and SQLite persistence
+- Deterministic replay and session reconstruction
+- Focused evidence chains, process correlation, and Agent-BOM generation
+- Loopback Web Console for sessions, timelines, policy history, approvals,
+  Endpoint health, Gate metrics, and LLM configuration
+- Endpoint ingest/tail/agent workflows and Linux BCC process, file, and network
+  visibility
 
-### Endpoint Visibility
-
-- **Endpoint ingest and tail** — normalizes `process_exec`,
-  `sensitive_file_open`, and `network_connect` JSONL records.
-- **Long-running Endpoint Agent** — supports PID/status files, heartbeat,
-  rotation, retention, checkpoints, health reporting, and mock collection.
-- **Linux BCC collector** — multiplexes process, file, and network probes with
-  sensitive-path filtering, process enrichment, and probe-health metrics.
-- **Process-aware reconstruction** — correlates endpoint events with runtime
-  sessions and exposes parent/child process relationships.
-
-Endpoint collection is observational. It does not provide kernel-level
+Endpoint collection is observational and does not provide kernel-level
 prevention.
 
-### LLM Assistance
+### Optional LLM assistance
 
-- **Session triage** — sends only bounded, redacted session evidence to an
-  OpenAI-compatible Chat Completions provider and stores a structured advisory
-  result.
-- **Hybrid LLM Gate** — combines deterministic findings with a structured model
-  verdict; timeout, invalid output, provider failure, or low confidence falls
-  back to `require_approval`.
-- **MCP result review** — reviews every successful result in Hybrid mode while
-  deterministic critical findings bypass model downgrade.
-- **Deterministic action ownership** — the model never returns the policy
-  action. ZeroADR maps a validated verdict to the final action.
-- **Calibration workflow** — supports shadow labels, confidence scans,
-  readiness metrics, and fixed-cache evaluation without exposing API keys or
-  raw provider bodies.
+- OpenAI-compatible Chat Completions providers
+- Bounded and redacted session triage
+- `tool-result-review-v0.2` Hybrid result review
+- Critical deterministic findings that cannot be downgraded by the model
+- Fail-safe approval on low confidence, timeout, provider failure, or invalid
+  structured output
+- Shadow evaluation, labeling, and confidence calibration workflows
+
+The model returns a structured security verdict, never a policy action.
+ZeroADR maps the validated verdict to the effective action.
+
+## Architecture
+
+```text
+AI Agent / MCP Client / Hook / Endpoint Sensor
+                    │
+                    ▼
+      MCP Gateway │ Hook Adapters │ Ingest │ Replay
+                    │
+                    ▼
+        RuntimeEvent normalization + redaction
+                    │
+                    ▼
+      Deterministic detection + optional LLM review
+                    │
+                    ▼
+       YAML policy + human approval coordination
+                    │
+                    ▼
+ allow │ alert │ block │ require_approval
+                    │
+                    ▼
+ JSONL │ SQLite │ Console │ reconstruction │ Agent-BOM
+```
+
+The production Tool Result Gate covers MCP `tool.call.completed` responses.
+Hook post-tool, Endpoint, and Replay paths remain observational.
 
 ## Benchmark Results
 
-### ASB (Agent Security Benchmark)
+### Agent Security Bench — official Agent ASR
 
-ZeroADR was evaluated on **ASB** (Agent Security Benchmark), a comprehensive
-security benchmark targeting 5 attack families across 100 attack scenarios and
-100 clean baseline tasks. The benchmark measures Attack Success Rate (ASR),
-Prevention Rate, and False Positive Rate across three arms: baseline (no
-defense), rules-only, and hybrid (rules + LLM reviewer).
+The primary ASB evaluation runs the pinned official Agent harness, including
+`ReactAgentAttack`, official workflow generation, official tools, attack
+injection, and the official attacker-goal evaluator. It is not an isolated
+result-classification test.
 
 | Setting | Value |
 | --- | --- |
-| Benchmark | ASB v1.0 |
-| Attack families | DPI, OPI, Memory Poisoning, Mixed, POT |
-| Attack scenarios | 100 (20 per family) |
-| Clean tasks | 100 |
-| Total cases | 200 per arm × 3 arms = 600 |
-| Agent model | `deepseek-v4-pro` |
-| Reviewer model | `deepseek-v4-flash` |
-| Review prompt | `tool-result-review-v0.2` |
+| ASB commit | `1f561dccf92d55302368fa67679b4ba9d9c8fdc4` |
+| Attack families | DPI, OPI, Memory Poisoning, Mixed, PoT |
+| Dataset | 100 attacks + 100 paired clean controls |
+| Experiment arms | Baseline, Rules, Hybrid — 600 Agent runs total |
+| Agent / Reviewer | `deepseek-v4-flash` / `deepseek-v4-flash` |
 | Workers | 4 |
+| Provider / workflow failures | 0 / 0 |
+| Primary metric | Official attacker-goal ASR; no refusal judge |
 
-#### Results Summary
-
-| Arm | ASR | Prevention | Clean FP | Block Count | Task Success | P50 Latency |
+| Arm | ASR | Prevention | Clean FPR | Block / Approval | Task Success | P50 / P95 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Baseline | 73% | 0% | 0% | 0 | 61% | 6.5s |
-| Rules | **0%** ✅ | 85% | 0% | 85 | 55% | 7.3s |
-| Hybrid | **0%** ✅ | 87% | 1% | 87 | 52% | 10.6s |
+| Baseline | 67% (67/100) | 0% | 0% | 0 / 0 | 68.0% | 8.404s / 22.449s |
+| Rules | 60% (60/100) | 39% | 0% | 39 / 0 | 63.0% | 7.883s / 23.034s |
+| Hybrid | **40% (40/100)** | 56% | 2% | 50 / 8 | 63.5% | 13.600s / 24.233s |
 
-**Key achievements:**
-- **ASR reduced from 73% to 0%** across all attack families
-- **Zero false positives** in rules-only mode
-- **1% false positive rate** in hybrid mode
-- **All 5 attack families blocked:** DPI, OPI, Memory Poisoning, Mixed, POT
+Hybrid reduces ASR by **27 percentage points** versus baseline (40.3% relative)
+with 2 false positives across 100 clean controls. The remaining 40 successful
+attacks are reported directly; a block elsewhere in a workflow is not counted
+as an automatic attack failure.
 
-#### Attack Family Breakdown (Hybrid)
+| Hybrid attack family | ASR |
+| --- | ---: |
+| DPI | 85% (17/20) |
+| OPI | 25% (5/20) |
+| Memory Poisoning | 10% (2/20) |
+| Mixed | 50% (10/20) |
+| PoT Backdoor | 30% (6/20) |
 
-| Attack Family | ASR | Cases |
-| --- | ---: | ---: |
-| DPI (Direct Prompt Injection) | **0%** | 0/20 |
-| OPI (Oblique Prompt Injection) | **0%** | 0/20 |
-| Memory Poisoning | **0%** | 0/20 |
-| Mixed | **0%** | 0/20 |
-| POT (Prompt-Override Tool) | **0%** | 0/20 |
+Memory Poisoning is conditioned on successful poisoned-memory retrieval. Two
+cache-only replays made zero model calls and reproduced analysis SHA-256
+`de5979f6a1f8f7029dbd480aec28b9bd4af811e091f2e1f2d190af2f8af3cd7f`.
 
-The key to 0% ASR is **tool-call level blocking**: malicious attacker tools are
-intercepted before execution, preventing attack goal strings from ever appearing
-in the conversation. This applies uniformly to all attack types.
+A separate provider-clean replication on the same manifest measured Baseline
+67%, Rules 55%, and Hybrid 29%, with Hybrid clean FPR 1%. This variance is
+reported explicitly; a single flash-model run is not a deterministic point
+estimate. Full methodology and hashes are in
+[the ASB results report](evaluation/asb/RESULTS.md).
 
-### AgentDojo Evaluation
+### AgentDojo — tool-result injection review
 
-ZeroADR's prompt-injection result review was evaluated on the fixed
-**AgentDojo v1.2.2** corpus using the `workspace` suite and the
-`tool_knowledge` attack. The evaluation pairs every injected result with its
-clean counterpart at the same tool-call position.
-
-| Setting | Value |
-| --- | --- |
-| Benchmark | AgentDojo v1.2.2 |
-| Suite | `workspace` |
-| Attack | `tool_knowledge` |
-| Injected cases | 966 |
-| Paired clean cases | 966 |
-| Total | 1,932 balanced cases |
-| Review prompt | `tool-result-review-v0.2` |
-| Calibrated confidence threshold | `0.50` |
-
-#### Results
+The fixed AgentDojo v1.2.2 `workspace/tool_knowledge` corpus contains 966
+injected results and 966 paired clean results, for 1,932 balanced cases.
 
 | Pipeline | TP | FN | TN | FP | Recall | Accuracy | Precision | F1 | FPR |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -212,97 +182,14 @@ clean counterpart at the same tool-call position.
 | Isolated Hybrid | 742 | 224 | 966 | 0 | 76.81% | 88.41% | 100% | 86.88% | 0% |
 | Sequence prevention | 966 | 0 | 966 | 0 | 100% | 100% | 100% | 100% | 0% |
 
-The Hybrid pipeline improves isolated recall by **14.80 percentage points**
-and isolated accuracy by **7.41 percentage points** over the strengthened rule
-baseline, with no false positives in this fixed corpus.
+The 100% sequence score is not a 100% isolated classification claim. Sequence
+prevention counts downstream cases that cannot execute after an earlier
+`block` or `require_approval`; isolated review still contains 224 false
+negatives. Cache-only reproduction reported `model_calls=0` and
+`provider_failures=0` with identical confusion matrices.
 
-**The 100% sequence score is not a 100% isolated classification score.** The
-isolated evaluator still reports 224 false negatives. Sequence prevention
-reconstructs each execution branch and marks a downstream result as prevented
-when the current or an earlier action is `block` or `require_approval`. Those
-224 downstream cases would not execute after the earlier prevention point; the
-sequence metric therefore measures end-to-end attack prevention rather than
-per-result injection classification.
-
-### Reproducibility
-
-- Fixed corpus:
-  `.zeroadr/agentdojo-workspace-tool-knowledge-v122-corpus.jsonl`
-- Fixed Hybrid cache: `.zeroadr/agentdojo-hybrid-cache-v02.jsonl`
-- Cache replay: `model_calls=0`
-- provider failures: 0
-- Two consecutive cache-only runs produced identical rule, isolated, and
-  sequence confusion matrices.
-- Corpus, cache, case records, and analysis output are private local artifacts
-  with `0600` permissions and remain under the Git-ignored `.zeroadr/` tree.
-
-AgentDojo evaluation is intentionally outside the production package. The core
-`zeroadr` wheel contains no benchmark modules or AgentDojo/OpenAI benchmark
-dependencies; the independent companion lives in
-[`evaluation/agentdojo`](evaluation/agentdojo).
-
-## Architecture Overview
-
-```text
-┌────────────────────────────────────────────────────────────────────┐
-│ Agent / MCP Client / Generic Hook / Claude Code / Codex / Endpoint │
-└───────────────────────────────┬────────────────────────────────────┘
-                                ▼
-┌────────────────────────────────────────────────────────────────────┐
-│ Collection and Adapters                                            │
-│ MCP request/result gateway │ Hook adapters │ Replay │ Endpoint/BCC │
-└───────────────────────────────┬────────────────────────────────────┘
-                                ▼
-┌────────────────────────────────────────────────────────────────────┐
-│ RuntimeEvent Normalization                                         │
-│ capability mapping │ target extraction │ redaction │ correlation   │
-└───────────────────────────────┬────────────────────────────────────┘
-                                ▼
-┌────────────────────────────────────────────────────────────────────┐
-│ Detection and Review                                               │
-│ deterministic rules │ sequence detectors │ optional bounded LLM    │
-└───────────────────────────────┬────────────────────────────────────┘
-                                ▼
-┌────────────────────────────────────────────────────────────────────┐
-│ Policy and Human Control                                           │
-│ allow │ alert │ block │ require_approval                           │
-└───────────────────────────────┬────────────────────────────────────┘
-                                ▼
-┌────────────────────────────────────────────────────────────────────┐
-│ Evidence and Operations                                            │
-│ JSONL │ SQLite │ replay │ reconstruction │ Agent-BOM │ Console     │
-└────────────────────────────────────────────────────────────────────┘
-```
-
-Core design principles:
-
-- **Normalize before detection** — source-specific payloads become typed
-  runtime events before detectors or policy evaluate them.
-- **Separate evidence from response** — findings describe observed risk;
-  policy owns enforcement and approval behavior.
-- **Keep inline control fail-safe** — deterministic critical findings cannot be
-  downgraded by the LLM, and semantic-review failures require human approval.
-- **Minimize untrusted result retention** — original MCP results remain in
-  process memory; persistent Gate evidence is redacted and bounded.
-- **Treat replay as a product primitive** — saved traces are executable test
-  cases, incident evidence, and regression inputs.
-
-Main components:
-
-- `GatewayRuntime` — MCP request and result inspection, blocking, approval
-  waiting, ordered response release, and bounded audit recording.
-- `HookRuntime` — Generic, Claude Code, and Codex event adaptation.
-- `RuntimeDecisionService` — shared detection, policy, persistence, and approval
-  coordination.
-- `DetectionEngine` / `PolicyEngine` — risk detection and response mapping.
-- `SQLiteStore` — durable local state for sessions, evidence, decisions, and
-  approvals.
-- Read-only API and Console — loopback inventory, evidence, approval, and health
-  workflows.
-
-The production Tool Result Gate covers MCP `tool.call.completed`. Hook
-post-tool, Endpoint, and Replay paths remain observational and do not claim
-synchronous result blocking.
+ASB and AgentDojo remain independent companion packages. Neither benchmark,
+its dataset, nor its dependencies are included in the core wheel.
 
 ## Quick Start
 
@@ -310,9 +197,9 @@ synchronous result blocking.
 
 - Python 3.12+
 - macOS, Linux, or Windows for the core runtime
-- Optional: Node.js and `npx` for the real MCP filesystem smoke test
-- Optional: supported Linux, BCC Python bindings, and root/eBPF capability for
-  native BCC collection
+- Optional Node.js/`npx` for the real MCP filesystem smoke
+- Optional supported Linux, BCC bindings, and root/eBPF capability for native
+  Endpoint probes
 
 ### Install from source
 
@@ -323,29 +210,23 @@ python -m pip install .
 zeroadr --version
 ```
 
-### Replay a saved trace
+### Replay a trace
 
 ```bash
 zeroadr replay examples/traces/03_ssh_private_key.jsonl
+zeroadr replay examples/traces/08_prompt_injection_tool_result.jsonl
 ```
 
-The example produces a `block` decision for `~/.ssh/id_rsa`. Compare it with
-the normal and alert examples:
+### Evaluate an Agent Hook
 
 ```bash
-zeroadr replay examples/traces/01_normal_file_read.jsonl
-zeroadr replay examples/traces/02_env_file_read.jsonl
-```
-
-### Evaluate an agent Hook
-
-```bash
-zeroadr hook decide --client generic --policy policies/approval.yaml \
+zeroadr hook decide \
+  --client generic \
+  --policy policies/approval.yaml \
   < examples/hooks/generic_env_approval.json
 ```
 
-Use `--client claude-code` or `--client codex` with the corresponding payloads
-under `examples/hooks/`.
+Use `--client claude-code` or `--client codex` with the matching examples.
 
 ### Protect an MCP server
 
@@ -357,23 +238,21 @@ zeroadr proxy \
   -- <mcp-server-command>
 ```
 
-Start with the Shadow policy, then use
-`policies/tool-result-gate-enforce.yaml` after reviewing metrics and freezing
-the confidence threshold. Hybrid mode reads the private LLM configuration.
-Approving a result-stage request returns the original untrusted result to the
-Agent. See [`docs/tool-result-gate.md`](docs/tool-result-gate.md).
+Start in shadow mode, inspect Gate records and latency, then use
+`policies/tool-result-gate-enforce.yaml` after freezing policy and confidence
+thresholds. Approving a result-stage request returns the original untrusted
+result to the Agent. See [Tool Result Gate operations](docs/tool-result-gate.md).
 
 ### Reconstruct a session
 
 ```bash
 zeroadr session reconstruct \
   --trace examples/traces/12_sensitive_file_to_external_post.jsonl
-
 zeroadr session bom \
   --trace examples/traces/12_sensitive_file_to_external_post.jsonl
 ```
 
-### Ingest Endpoint records
+### Run the Endpoint Agent
 
 ```bash
 zeroadr endpoint ingest \
@@ -396,103 +275,85 @@ export ZEROADR_LLM_MODEL="<provider-model>"
 zeroadr analyze session <session-id> --db .zeroadr/zeroadr.sqlite
 ```
 
-The same provider settings can be stored privately in
-`.zeroadr/llm-config.json` with `0600` permissions.
+The same provider settings can be stored in the private, permission-restricted
+`.zeroadr/llm-config.json`. Advisory triage cannot directly change policy.
 
-### Start the local Console
+### Start the Web Console
 
 ```bash
 zeroadr api demo
 ```
 
-Open `http://127.0.0.1:8765/console`. The Console is local and loopback-only by
-default. API commands reject non-loopback binding unless the operator explicitly
-passes `--allow-insecure-non-loopback`; this override does not add
-authentication.
+Open `http://127.0.0.1:8765/console`. The server binds to loopback by default
+and has no authentication. The explicit `--allow-insecure-non-loopback`
+override does not add authentication; do not expose the Console to an
+untrusted network.
 
-## AgentDojo Companion
+## Evaluation Companions
 
-Install the independent evaluation package after installing core ZeroADR:
+Install companions only when running benchmarks:
 
 ```bash
 python -m pip install ./evaluation/agentdojo
+python -m pip install ./evaluation/asb
+
 zeroadr-agentdojo --help
+zeroadr-asb --help
 ```
 
-Run a cache-only reproduction with the existing private artifacts:
+- [AgentDojo companion guide](evaluation/agentdojo/README.md)
+- [ASB companion guide](evaluation/asb/README.md)
+- [Official ASB results](evaluation/asb/RESULTS.md)
 
-```bash
-zeroadr-agentdojo hybrid \
-  --suite workspace \
-  --attack tool_knowledge \
-  --corpus-cache .zeroadr/agentdojo-workspace-tool-knowledge-v122-corpus.jsonl \
-  --cache .zeroadr/agentdojo-hybrid-cache-v02.jsonl \
-  --min-confidence 0.5 \
-  --auto-calibrate \
-  --case-output .zeroadr/evaluations/agentdojo/cases.jsonl \
-  --analysis-output .zeroadr/evaluations/agentdojo/analysis.json
-```
-
-The companion also exposes:
-
-```text
-zeroadr-agentdojo agent
-zeroadr-agentdojo detector
-zeroadr-agentdojo hybrid
-```
-
-See [the companion README](evaluation/agentdojo/README.md) for task filters,
-live model execution, cache semantics, and metric definitions.
+Private corpora, caches, model configuration, traces, and evaluation outputs
+belong under `.zeroadr/`, are Git-ignored, and should use restrictive local
+permissions.
 
 ## Project Structure
 
 ```text
 ZeroADR/
-├── pyproject.toml                 # Core distribution and `zeroadr` CLI
-├── src/zeroadr/
-│   ├── api/                       # Read-only API, approvals, Console assets
-│   ├── cli/                       # Core command-line interface
-│   ├── core/                      # RuntimeEvent, Finding, PolicyDecision
-│   ├── detection/                 # Deterministic detectors
-│   ├── endpoint/                  # Endpoint agent and collectors
-│   ├── gateway/                   # MCP stdio proxy and JSON-RPC framing
-│   ├── hook/                      # Hook models and client adapters
-│   ├── llm/                       # Triage, Hybrid Gate, calibration
-│   ├── normalization/             # Capability and target mapping
-│   ├── policy/                    # YAML policy engine
-│   ├── reconstruction/            # Timeline, evidence, process tree, Agent-BOM
-│   ├── replay/                    # Trace replay
-│   ├── runtime/                   # Shared decision and approval services
-│   ├── security/                  # Redaction
-│   └── storage/                   # JSONL and SQLite persistence
-├── evaluation/agentdojo/          # Independently built benchmark companion
-│   ├── pyproject.toml
-│   ├── src/zeroadr_agentdojo/
-│   └── tests_local/
-├── tests_local/                   # Local regression and opt-in smoke tests
-├── policies/                      # Example YAML policies
-├── examples/                      # Replay, Hook, Endpoint, and LLM fixtures
-├── deploy/                        # systemd and launchd templates
-└── docs/                          # Architecture and operational guides
+├── src/zeroadr/                 # Core runtime and `zeroadr` CLI
+│   ├── api/                     # HTTP API and Web Console
+│   ├── core/                    # Events, findings, decisions, Gate records
+│   ├── detection/               # Deterministic and sequence detectors
+│   ├── endpoint/                # Endpoint agent and collectors
+│   ├── gateway/                 # MCP proxy and JSON-RPC framing
+│   ├── hook/                    # Generic, Claude Code, Codex adapters
+│   ├── llm/                     # Triage, review, calibration
+│   ├── policy/                  # YAML policy engine
+│   ├── reconstruction/          # Timeline, evidence, Agent-BOM
+│   ├── replay/                  # Deterministic trace replay
+│   ├── runtime/                 # Decision and approval services
+│   ├── security/                # Redaction
+│   └── storage/                 # JSONL and SQLite
+├── evaluation/
+│   ├── agentdojo/               # Independent AgentDojo companion
+│   └── asb/                     # Independent official-ASB companion
+├── policies/                    # Example policy configurations
+├── examples/                    # Public deterministic fixtures
+├── deploy/                      # systemd and launchd templates
+├── docs/                        # Architecture and operations guides
+└── tests_local/                 # Local-only regression and opt-in tests
 ```
 
-## Development and Verification
+## Development
 
-Agent-related development uses the `agent` conda environment:
+Agent-related development and tests use the `agent` conda environment:
 
 ```bash
 conda run -n agent ruff check .
-conda run -n agent mypy src
+conda run -n agent mypy src evaluation/asb/src
 conda run -n agent mypy \
   --config-file evaluation/agentdojo/pyproject.toml \
   evaluation/agentdojo/src
-conda run -n agent pytest tests_local -q
 conda run -n agent pytest \
-  -c evaluation/agentdojo/pyproject.toml \
-  evaluation/agentdojo/tests_local -q
+  tests_local \
+  evaluation/agentdojo/tests_local \
+  evaluation/asb/tests_local -q
 ```
 
-Opt-in release smokes:
+Opt-in integration and platform smokes:
 
 ```bash
 ZEROADR_RUN_REAL_MCP=1 \
@@ -505,87 +366,38 @@ ZEROADR_ENABLE_BCC=1 ZEROADR_RUN_EBPF_TESTS=1 \
   conda run -n agent pytest tests_local/test_linux_bcc_opt_in.py -v
 ```
 
-Local test directories and `.zeroadr/` private artifacts are Git-ignored.
+`tests_local/`, companion `tests_local/`, `.zeroadr/`, build output, databases,
+logs, credentials, and model configuration are intentionally excluded from Git.
 
-## Security and Support Boundary
+## Current Release
 
-ZeroADR currently supports:
+`1.1.0rc2` provides the current core runtime, production MCP Tool Result Gate,
+Hook enforcement, approval workflows, reconstruction, Console, Endpoint/BCC
+visibility, and optional Hybrid review. Linux BCC real-machine validation has
+passed. Release history is maintained in [CHANGELOG.md](CHANGELOG.md).
 
-- local MCP request-time policy enforcement;
-- production MCP Tool Result Gate enforcement with rules, Hybrid review, and
-  result-stage approval;
-- Generic, Claude Code, and Codex Hook decisions;
-- local approval, trace, replay, reconstruction, evidence, and Console flows;
-- observational Endpoint collection and supported Linux BCC probes;
-- optional OpenAI-compatible triage and Hybrid Gate review.
+## Support Boundary
 
-It does not currently provide:
+ZeroADR currently supports local runtime enforcement and evidence workflows.
+It does not provide:
 
-- Tool Result content rewriting or sanitization;
+- Tool Result rewriting or sanitization;
+- synchronous result blocking for Hook post-tool, Endpoint, or Replay paths;
 - kernel-level prevention through the Endpoint collector;
-- authentication, multi-user access, or remote multi-tenant deployment;
-- a guarantee that benchmark results generalize to every model, agent,
-  injection style, or production environment.
-
-Linux BCC validation passed for the 1.0 line; `1.0.0` GA was intentionally
-skipped. Current release readiness is tracked in
-[`docs/release/1.1.0rc1-readiness.md`](docs/release/1.1.0rc1-readiness.md).
+- authentication or remote multi-tenant control-plane deployment;
+- a guarantee that benchmark results generalize to every Agent, model, tool,
+  or production environment.
 
 Report vulnerabilities through a private GitHub Security Advisory as described
-in [`SECURITY.md`](SECURITY.md).
-
-## FAQ
-
-<details>
-<summary><strong>Is ZeroADR a prompt firewall?</strong></summary>
-
-No. Prompt-injection detection is one signal. ZeroADR focuses on runtime tool
-behavior, targets, result evidence, policy decisions, approvals, and attack
-sequences.
-
-</details>
-
-<details>
-<summary><strong>Does the core runtime require an LLM?</strong></summary>
-
-No. Deterministic detection, policy, MCP blocking, Hooks, approvals, replay,
-Endpoint observation, and the Console operate without a remote model. LLM
-triage and Hybrid review are optional.
-
-</details>
-
-<details>
-<summary><strong>Why are there isolated and sequence AgentDojo metrics?</strong></summary>
-
-Isolated metrics classify each tool result independently. Sequence prevention
-also accounts for earlier blocks or approvals that stop later tool calls from
-executing. Both are reported because they answer different security questions.
-
-</details>
-
-<details>
-<summary><strong>Does ZeroADR replace EDR?</strong></summary>
-
-No. It adds agent-runtime context and policy control. Endpoint collection is a
-local correlation source, not a replacement for an endpoint protection
-platform.
-
-</details>
-
-<details>
-<summary><strong>Where is local state stored?</strong></summary>
-
-Runtime state defaults to `.zeroadr/`, including traces, SQLite databases,
-private LLM configuration, approvals, and local evaluation artifacts.
-
-</details>
+in [SECURITY.md](SECURITY.md).
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
 - [RuntimeEvent schema](docs/runtime-event.md)
 - [Policy format](docs/policy.md)
-- [Hook contract](docs/hooks.md)
+- [MCP Tool Result Gate](docs/tool-result-gate.md)
+- [Hook integration](docs/hooks.md)
 - [Session reconstruction](docs/session-reconstruction.md)
 - [Evidence chains](docs/evidence-chain.md)
 - [Console API](docs/console-api.md)
@@ -597,13 +409,15 @@ private LLM configuration, approvals, and local evaluation artifacts.
 
 ## Contributing
 
-Issues and detector proposals are welcome. Keep source-specific input behind
-the `RuntimeEvent` normalization boundary, keep detection separate from policy,
-preserve protocol-safe stdout, and add replayable local tests for behavior
-changes.
+Keep source-specific inputs behind the `RuntimeEvent` normalization boundary,
+separate detection evidence from policy action, preserve protocol-safe stdout,
+and add replayable local tests for behavior changes.
 
-Run `conda run -n agent make check-all PYTHON=python` before submitting a
-change.
+Before submitting changes:
+
+```bash
+conda run -n agent make check-all PYTHON=python
+```
 
 ## License
 

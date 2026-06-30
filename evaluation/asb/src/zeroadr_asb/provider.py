@@ -34,21 +34,35 @@ class OpenAICompatibleAgentBackend:
         )
         self.model = model
         self.max_output_tokens = max_output_tokens
+        self.model_calls = 0
+        self.provider_attempts = 0
+        self.timeout_count = 0
+        self.rate_limit_count = 0
+        self.http_error_count = 0
+        self.invalid_response_count = 0
 
     def complete(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
     ) -> AgentReply:
+        self.model_calls += 1
+        normalized_tools = _normalise_tool_schemas(tools)
         response = call_with_retries(
             lambda: self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                tools=tools,
-                tool_choice="auto",
+                tools=normalized_tools or None,
+                tool_choice="auto" if normalized_tools else None,
                 temperature=0,
                 max_tokens=self.max_output_tokens,
-            )
+            ),
+            on_attempt=self._record_attempt,
+            on_error=self._record_error,
         )
-        message = response.choices[0].message
+        try:
+            message = response.choices[0].message
+        except (AttributeError, IndexError, TypeError):
+            self.invalid_response_count += 1
+            raise ValueError("invalid provider response") from None
         calls: list[AgentToolCall] = []
         for call in message.tool_calls or []:
             try:
@@ -59,6 +73,19 @@ class OpenAICompatibleAgentBackend:
                 arguments = {}
             calls.append(AgentToolCall(call.id, call.function.name, arguments))
         return AgentReply(content=message.content or "", tool_calls=calls)
+
+    def _record_attempt(self) -> None:
+        self.provider_attempts += 1
+
+    def _record_error(self, exc: Exception) -> None:
+        status_code = getattr(exc, "status_code", None)
+        name = type(exc).__name__.lower()
+        if isinstance(exc, TimeoutError) or "timeout" in name:
+            self.timeout_count += 1
+        elif "ratelimit" in name or status_code == 429:
+            self.rate_limit_count += 1
+        elif isinstance(status_code, int):
+            self.http_error_count += 1
 
     def judge_refusal(self, messages: list[dict[str, Any]]) -> bool:
         transcript = "\n".join(
@@ -134,11 +161,39 @@ def adjudicate_with_retries(
     raise RuntimeError("unreachable")
 
 
-def call_with_retries(operation: Callable[[], T], *, max_attempts: int = 3) -> T:
+def _normalise_tool_schemas(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for tool in tools:
+        copied = dict(tool)
+        function = copied.get("function")
+        if isinstance(function, dict):
+            function = dict(function)
+            if not isinstance(function.get("parameters"), dict):
+                function["parameters"] = {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": True,
+                }
+            copied["function"] = function
+        normalized.append(copied)
+    return normalized
+
+
+def call_with_retries(
+    operation: Callable[[], T],
+    *,
+    max_attempts: int = 3,
+    on_attempt: Callable[[], None] | None = None,
+    on_error: Callable[[Exception], None] | None = None,
+) -> T:
     for attempt in range(1, max_attempts + 1):
+        if on_attempt is not None:
+            on_attempt()
         try:
             return operation()
         except Exception as exc:
+            if on_error is not None:
+                on_error(exc)
             status_code = getattr(exc, "status_code", None)
             name = type(exc).__name__.lower()
             retryable = (

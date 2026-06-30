@@ -55,9 +55,6 @@ class AgentBackend(Protocol):
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
     ) -> AgentReply: ...
 
-    def judge_refusal(self, messages: list[dict[str, Any]]) -> bool: ...
-
-
 class ResultReviewer(Protocol):
     def review(
         self, event: RuntimeEvent, findings: list[Finding], case_id: str
@@ -87,6 +84,15 @@ class CaseResult:
     latency_ms: int
     reviewer_latency_ms: int
     provider_error_codes: list[str]
+    detection_policy_latency_ms: int = 0
+    asr_evaluator_latency_ms: int = 0
+    cache_write_latency_ms: int = 0
+    provider_attempts: int = 0
+    timeout_count: int = 0
+    rate_limit_count: int = 0
+    http_error_count: int = 0
+    invalid_response_count: int = 0
+    official_harness: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -150,12 +156,6 @@ def run_case(
     provider_failure = False
     provider_error_codes: list[str] = []
     engine = DetectionEngine()
-    attacker_tool_name = (
-        str(resolved.attacker.get("Attacker Tool", ""))
-        if case.label == "attack"
-        else None
-    )
-
     try:
         for turn in range(max_turns):
             reply = backend.complete(messages, tools)
@@ -192,13 +192,6 @@ def run_case(
                     arguments=arguments,
                 )
                 pre_findings = [] if arm is Arm.BASELINE else engine.detect(request_event)
-                # Block malicious attacker tool calls before execution
-                if arm is not Arm.BASELINE and attacker_tool_name and tool_name == attacker_tool_name:
-                    effective = _stronger(effective, "block")
-                    messages.append(
-                        _tool_message(call, "[ZeroADR blocked a malicious tool call.]")
-                    )
-                    continue
                 pre_arm = Arm.RULES if arm is Arm.HYBRID else arm
                 pre_decision = effective_action(
                     pre_arm,
@@ -271,13 +264,6 @@ def run_case(
     original_success = check_original_success(messages, resolved.normal_tools)
     refused = False
     refusal_calls = 0
-    if not workflow_failure:
-        try:
-            refused = backend.judge_refusal(messages)
-            refusal_calls = 1
-        except Exception as exc:
-            provider_failure = True
-            provider_error_codes.append(safe_error_code(exc))
     return CaseResult(
         case_id=case.case_id,
         pair_id=case.pair_id,

@@ -108,6 +108,11 @@ class OpenAICompatibleToolResultReviewer:
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
         self.transport = transport
+        self.client = httpx.Client(
+            timeout=self.timeout,
+            transport=self.transport,
+            verify=True,
+        )
 
     def adjudicate(
         self,
@@ -136,15 +141,14 @@ class OpenAICompatibleToolResultReviewer:
             "response_format": {"type": "json_object"},
         }
         try:
-            with httpx.Client(timeout=self.timeout, transport=self.transport, verify=True) as client:
-                response = client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=body,
-                )
+            response = self.client.post(
+                f"{self.base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
         except httpx.TimeoutException as exc:
             raise LLMProviderError("provider_timeout", "Provider request timed out.") from exc
         except httpx.TransportError as exc:
@@ -169,6 +173,9 @@ class OpenAICompatibleToolResultReviewer:
             provider_request_id=response.headers.get("x-request-id"),
             latency_ms=max(0, round((time.monotonic() - started) * 1000)),
         )
+
+    def close(self) -> None:
+        self.client.close()
 
 
 def build_tool_result_reviewer(config_path: Path) -> OpenAICompatibleToolResultReviewer | None:

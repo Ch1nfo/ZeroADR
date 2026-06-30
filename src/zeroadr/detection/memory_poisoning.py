@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from zeroadr.core.events import RuntimeEvent
-from zeroadr.core.findings import Finding, Severity, new_finding
+from zeroadr.core.findings import Finding, new_finding
 
 
 MAX_EVIDENCE_CHARS = 65536

@@ -7,12 +7,12 @@ import sys
 from typing import Any
 
 from zeroadr_asb.analysis import analyze_results
-from zeroadr_asb.benchmark import run_benchmark
+from zeroadr_asb.benchmark import run_benchmark, run_concurrency_sweep
 from zeroadr_asb.manifest import ASB_COMMIT, ASB_SEED, build_manifest, write_manifest
 from zeroadr_asb.source import prepare_asb_source, verify_asb_source
 
 
-DEFAULT_ROOT = Path(".zeroadr/evaluations/asb")
+DEFAULT_ROOT = Path(".zeroadr/evaluations/asb/official-v2")
 DEFAULT_ASB_ROOT = Path(".zeroadr/vendor/asb")
 
 
@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     manifest.add_argument("--attack-cases", type=int, default=100)
     manifest.add_argument("--paired-clean", action=argparse.BooleanOptionalAction, default=True)
     manifest.add_argument("--seed", default=ASB_SEED)
-    manifest.add_argument("--output", default=str(DEFAULT_ROOT / "manifest-asb-100-v1.jsonl"))
+    manifest.add_argument("--output", default=str(DEFAULT_ROOT / "manifest-asb-100-v2.jsonl"))
     run = commands.add_parser("run")
     _add_run_args(run)
     run.add_argument("--asb-root", default=str(DEFAULT_ASB_ROOT))
@@ -37,16 +37,21 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark = commands.add_parser("benchmark")
     _add_run_args(benchmark)
     benchmark.add_argument("--asb-root", default=str(DEFAULT_ASB_ROOT))
+    sweep = commands.add_parser("sweep")
+    _add_run_args(sweep)
+    sweep.add_argument("--asb-root", default=str(DEFAULT_ASB_ROOT))
+    sweep.set_defaults(dry_run=True)
     return parser
 
 
 def _add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--arms", default="baseline,rules,hybrid")
-    parser.add_argument("--manifest", default=str(DEFAULT_ROOT / "manifest-asb-100-v1.jsonl"))
+    parser.add_argument("--manifest", default=str(DEFAULT_ROOT / "manifest-asb-100-v2.jsonl"))
     parser.add_argument("--llm-config", default=".zeroadr/llm-config.json")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--output-dir", default=str(DEFAULT_ROOT / "formal"))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -67,17 +72,18 @@ def main(argv: list[str] | None = None) -> int:
             return _print(
                 {"ok": True, **prepare_asb_source(Path(args.asb_root), args.commit)}
             )
-        if args.command_name in {"run", "benchmark"}:
+        if args.command_name in {"run", "benchmark", "sweep"}:
             asb_root = Path(getattr(args, "asb_root", DEFAULT_ASB_ROOT))
             verify_asb_source(asb_root)
             arms = tuple(item.strip() for item in args.arms.split(",") if item.strip())
-            result = run_benchmark(
+            runner = run_concurrency_sweep if args.command_name == "sweep" else run_benchmark
+            result = runner(
                 asb_root=asb_root,
                 manifest_path=Path(args.manifest),
-                output_dir=DEFAULT_ROOT,
+                output_dir=Path(args.output_dir),
                 arms=arms,
                 llm_config_path=Path(args.llm_config),
-                workers=args.workers,
+                **({} if args.command_name == "sweep" else {"workers": args.workers}),
                 resume=args.resume,
                 dry_run=args.dry_run,
             )

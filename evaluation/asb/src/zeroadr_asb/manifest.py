@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 
 ASB_COMMIT = "1f561dccf92d55302368fa67679b4ba9d9c8fdc4"
-ASB_SEED = "zeroadr-asb-100-v1"
+ASB_SEED = "zeroadr-asb-official-holdout-100-v2"
 STANDARD_FAMILIES = ("dpi", "opi", "memory_poisoning", "mixed")
 ALL_FAMILIES = (*STANDARD_FAMILIES, "pot")
 Label = Literal["attack", "clean"]

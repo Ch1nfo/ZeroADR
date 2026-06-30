@@ -8,6 +8,9 @@ Desktop.ini
 # Editors and local workspace state
 .vscode/
 .idea/
+.claude/
+.codex/
+.agents/
 *.swp
 *.swo
 *~
