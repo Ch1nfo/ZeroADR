@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import json
 import sys
 import time
@@ -26,10 +27,12 @@ from zeroadr.llm.tool_result_review import (
     build_tool_result_review_payload,
     build_tool_result_reviewer,
 )
+from zeroadr.llm.stage_review import build_stage_reviewer
 from zeroadr.normalization.capability_mapper import map_capability
 from zeroadr.policy.engine import PolicyEngine
 from zeroadr.runtime.approvals import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from zeroadr.runtime.service import RuntimeDecisionService
+from zeroadr.runtime.security_coordinator import RuntimeSecurityCoordinator, StageReviewer
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,7 @@ class ToolResultInspectionResult:
     approval_request: ApprovalRequest | None = None
     adjudication: LLMAdjudication | None = None
     gate_record: ToolResultGateRecord | None = None
+    response_override: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +85,7 @@ class GatewayRuntime:
         db_path: Path | None = None,
         adjudicator: LLMAdjudicator | None = None,
         tool_result_reviewer: LLMAdjudicator | None = None,
+        stage_reviewer: StageReviewer | None = None,
     ) -> None:
         self.session_id = session_id or f"sess_{new_ulid()}"
         self.server_name = server_name
@@ -95,7 +100,13 @@ class GatewayRuntime:
             adjudicator=adjudicator,
         )
         self.pending: dict[str | int, PendingCall] = {}
+        self.pending_metadata: set[str | int] = set()
         self.tool_result_reviewer = tool_result_reviewer
+        self.security_coordinator = RuntimeSecurityCoordinator(
+            policy_engine=self.policy_engine,
+            store=self.decision_service.store,
+            reviewer=stage_reviewer,
+        )
         self.decision_service.record(
             new_event(
                 event_type="session.start",
@@ -107,6 +118,14 @@ class GatewayRuntime:
         )
 
     def inspect_client_message(self, message: dict[str, Any]) -> ClientInspectionResult:
+        if message.get("method") == "tools/list":
+            request_id = message.get("id")
+            if (
+                isinstance(request_id, str | int)
+                and self.policy_engine.tool_metadata_gate is not None
+            ):
+                self.pending_metadata.add(request_id)
+            return ClientInspectionResult()
         if message.get("method") != "tools/call":
             return ClientInspectionResult()
         request_id = message.get("id")
@@ -145,12 +164,40 @@ class GatewayRuntime:
         )
         result = self.decision_service.evaluate(event)
         decision = result.decision
+        coordinator_decision = None
+        if self.policy_engine.tool_request_gate is not None:
+            coordinator_decision = self.security_coordinator.review_tool_request(event)
+            if coordinator_decision.effective_action in {"block", "require_approval"}:
+                decision = new_policy_decision(
+                    policy_id="tool-request-gate",
+                    action=coordinator_decision.effective_action,
+                    reason="Tool Request Gate enforced the request.",
+                    session_id=event.session_id,
+                    event_id=event.event_id,
+                    finding_ids=[item.finding_id for item in coordinator_decision.findings],
+                )
         if decision.action == "block":
             return ClientInspectionResult(
                 block_response=self.policy_engine.render_jsonrpc_error(request_id, decision)
             )
         if decision.action == "require_approval":
-            approval_id = result.approval_request.approval_id if result.approval_request else None
+            approval_request = result.approval_request
+            if approval_request is None and self.decision_service.store is not None:
+                approval_request = new_approval_request(
+                    decision_id=decision.decision_id,
+                    session_id=event.session_id,
+                    event_id=event.event_id,
+                    request_id=event.request_id,
+                    policy_id=decision.policy_id,
+                    reason=decision.reason,
+                    finding_ids=decision.finding_ids,
+                    tool_name=event.tool_name,
+                    capability=event.capability,
+                    arguments=event.arguments,
+                    stage="pre_tool",
+                )
+                self.decision_service.store.save_approval_request(approval_request)
+            approval_id = approval_request.approval_id if approval_request else None
             pending = (
                 PendingCall(request_id, tool_name, arguments, event)
                 if isinstance(request_id, (str, int))
@@ -172,6 +219,9 @@ class GatewayRuntime:
         request_id = message.get("id")
         if not isinstance(request_id, str | int):
             return ToolResultInspectionResult()
+        if request_id in self.pending_metadata:
+            self.pending_metadata.discard(request_id)
+            return self._inspect_tool_metadata(message)
         pending = self.pending.pop(request_id, None)
         if not pending:
             return ToolResultInspectionResult()
@@ -179,12 +229,61 @@ class GatewayRuntime:
         gate = self.policy_engine.tool_result_gate
         if event.event_type != "tool.call.completed" or gate is None:
             self.decision_service.record(event)
+            if event.event_type == "tool.call.completed" and self.policy_engine.session_guard is not None:
+                self.security_coordinator.observe_result(event)
             return ToolResultInspectionResult()
         return self._inspect_tool_result(
             event,
             response_byte_count=response_byte_count,
             resource_limit_exceeded=resource_limit_exceeded,
         )
+
+    def _inspect_tool_metadata(self, message: dict[str, Any]) -> ToolResultInspectionResult:
+        gate = self.policy_engine.tool_metadata_gate
+        if gate is None:
+            return ToolResultInspectionResult()
+        result = message.get("result")
+        result_obj = result if isinstance(result, dict) else {}
+        tools = result_obj.get("tools")
+        if not isinstance(tools, list):
+            return ToolResultInspectionResult()
+        retained: list[Any] = []
+        changed = False
+        for item in tools:
+            if not isinstance(item, dict):
+                retained.append(item)
+                continue
+            name_value = item.get("name")
+            name = name_value if isinstance(name_value, str) else None
+            description_value = item.get("description")
+            description = description_value if isinstance(description_value, str) else None
+            mapping = map_capability(name, None, description)
+            event = new_event(
+                event_type="tool.metadata.discovered",
+                source_type="mcp_gateway",
+                session_id=self.session_id,
+                request_id=message.get("id"),
+                server_name=self.server_name,
+                tool_name=name,
+                capability=mapping.capability,
+                arguments=item,
+                raw={},
+            )
+            decision = self.security_coordinator.review_tool_metadata(event)
+            if gate.mode == "enforce" and decision.effective_action in {
+                "block",
+                "require_approval",
+            }:
+                changed = True
+                continue
+            retained.append(item)
+        if gate.mode == "shadow" or not changed:
+            return ToolResultInspectionResult()
+        rewritten = copy.deepcopy(message)
+        rewritten_result = rewritten.get("result")
+        if isinstance(rewritten_result, dict):
+            rewritten_result["tools"] = retained
+        return ToolResultInspectionResult(response_override=rewritten)
 
     def _server_event(self, message: dict[str, Any], pending: PendingCall) -> RuntimeEvent:
         request_id = pending.request_id
@@ -259,6 +358,7 @@ class GatewayRuntime:
             if findings_override is not None
             else self.decision_service.detector.detect(event)
         )
+        self.security_coordinator.observe_findings(event, findings)
         prepared = prepared_override or build_tool_result_review_payload(
             event, findings, case_id=event.event_id
         )
@@ -525,6 +625,11 @@ async def run_stdio_proxy(
             and policy_engine.tool_result_gate.review == "hybrid"
             else None
         ),
+        stage_reviewer=(
+            build_stage_reviewer(llm_config_path)
+            if policy_engine.has_stage_review()
+            else None
+        ),
     )
     process = await asyncio.create_subprocess_exec(
         *command,
@@ -718,7 +823,11 @@ async def run_stdio_proxy(
                     message,
                     response_byte_count=len(framed.raw),
                 )
-                if inspection.action == "block":
+                if inspection.response_override is not None:
+                    server_responses[request_id] = encode_framed_response(
+                        inspection.response_override, framed.framing
+                    )
+                elif inspection.action == "block":
                     response = runtime.render_tool_result_error(
                         request_id,
                         code=-32001,
@@ -783,6 +892,7 @@ async def run_stdio_proxy(
     server_task = asyncio.create_task(server_to_client())
     stderr_task = asyncio.create_task(stderr_to_log())
     shadow_review_tasks: set[asyncio.Task[Any]] = set()
+    terminated_after_clean_drain = False
     try:
         await client_task
         try:
@@ -796,6 +906,7 @@ async def run_stdio_proxy(
         except TimeoutError:
             process.terminate()
             return_code = await process.wait()
+            terminated_after_clean_drain = True
         await server_task
         await stderr_task
         if shadow_review_tasks:
@@ -810,6 +921,8 @@ async def run_stdio_proxy(
         for task in (client_task, server_task, stderr_task):
             if not task.done():
                 task.cancel()
+    if terminated_after_clean_drain and return_code < 0:
+        return 0
     return return_code
 
 

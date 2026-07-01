@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 import json
 import time
@@ -93,6 +93,8 @@ class CaseResult:
     http_error_count: int = 0
     invalid_response_count: int = 0
     official_harness: bool = False
+    stage_records: list[dict[str, Any]] = field(default_factory=list)
+    input_blocked: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)

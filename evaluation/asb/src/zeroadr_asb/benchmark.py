@@ -18,22 +18,31 @@ from zeroadr.llm.tool_result_review import (
     TOOL_RESULT_REVIEW_PROMPT_VERSION,
     OpenAICompatibleToolResultReviewer,
 )
+from zeroadr.llm.stage_review import (
+    AGENT_INPUT_REVIEW_PROMPT_VERSION,
+    TOOL_METADATA_REVIEW_PROMPT_VERSION,
+    TOOL_REQUEST_REVIEW_PROMPT_VERSION,
+    MIN_STAGE_REVIEW_OUTPUT_TOKENS,
+    OpenAICompatibleStageReviewer,
+)
 from zeroadr_asb.adapter import ResolvedASBCase, resolve_case
 from zeroadr_asb.analysis import analyze_results
 from zeroadr_asb.manifest import ASBCase, load_manifest
 from zeroadr_asb.official import run_official_case
-from zeroadr_asb.provider import CoreToolResultReviewer, OpenAICompatibleAgentBackend
+from zeroadr_asb.provider import CoreStageReviewer, CoreToolResultReviewer, OpenAICompatibleAgentBackend
 from zeroadr_asb.runner import AgentBackend, Arm, CaseResult, ResultReviewer
 from zeroadr.policy.engine import PolicyEngine
+from zeroadr.runtime.security_coordinator import StageReviewer
 
 
-ADAPTER_VERSION = "asb-official-agent-v1.0"
+ADAPTER_VERSION = "asb-official-agent-v1.2"
 FLASH_MODEL = "deepseek-v4-flash"
 FLASH_MIN_OUTPUT_TOKENS = 1_024
 BENCHMARK_MIN_TIMEOUT_SECONDS = 30.0
-DEFAULT_POLICY_PATH = Path(__file__).resolve().parent / "policies/asb-rules.yaml"
+DEFAULT_POLICY_PATH = Path(__file__).resolve().parent / "policies/asb-v12-enforce.yaml"
 BackendFactory = Callable[[ResolvedASBCase, Arm], AgentBackend]
 ReviewerFactory = Callable[[], ResultReviewer | None]
+StageReviewerFactory = Callable[[], StageReviewer | None]
 CaseRunner = Callable[..., CaseResult]
 
 
@@ -73,6 +82,8 @@ def run_concurrency_sweep(
     llm_config_path: Path = Path(".zeroadr/llm-config.json"),
     resume: bool = False,
     dry_run: bool = True,
+    policy_path: Path = DEFAULT_POLICY_PATH,
+    min_confidence: float = 0.85,
 ) -> dict[str, Any]:
     measurements: list[dict[str, Any]] = []
     baseline_p95 = 0
@@ -88,6 +99,8 @@ def run_concurrency_sweep(
             workers=workers,
             resume=resume,
             dry_run=dry_run,
+            policy_path=policy_path,
+            min_confidence=min_confidence,
         )
         elapsed = time.monotonic() - started
         arm_metrics = list(result["analysis"]["arms"].values())
@@ -143,7 +156,9 @@ def run_benchmark(
     dry_run: bool = False,
     backend_factory: BackendFactory | None = None,
     reviewer_factory: ReviewerFactory | None = None,
+    stage_reviewer_factory: StageReviewerFactory | None = None,
     policy_path: Path = DEFAULT_POLICY_PATH,
+    min_confidence: float = 0.85,
     case_runner: CaseRunner = run_official_case,
 ) -> dict[str, Any]:
     if not 1 <= workers <= 4:
@@ -196,6 +211,9 @@ def run_benchmark(
                     gate_config.max_output_tokens, FLASH_MIN_OUTPUT_TOKENS
                 ),
                 "timeout": max(gate_config.timeout, BENCHMARK_MIN_TIMEOUT_SECONDS),
+                "stage_max_output_tokens": max(
+                    gate_config.max_output_tokens, MIN_STAGE_REVIEW_OUTPUT_TOKENS
+                ),
             }
         )
         reviewer_local = threading.local()
@@ -218,6 +236,29 @@ def run_benchmark(
             return reviewer
 
         reviewer_factory = configured_reviewer
+    if stage_reviewer_factory is None and Arm.HYBRID in selected_arms:
+        stage_config = resolve_llm_gate_config(config_path=llm_config_path)
+        stage_local = threading.local()
+
+        def configured_stage_reviewer() -> StageReviewer:
+            stage_reviewer = getattr(stage_local, "reviewer", None)
+            if stage_reviewer is None:
+                stage_reviewer = CoreStageReviewer(
+                    OpenAICompatibleStageReviewer(
+                        base_url=stage_config.base_url,
+                        api_key=stage_config.api_key,
+                        model=FLASH_MODEL,
+                        timeout=max(stage_config.timeout, BENCHMARK_MIN_TIMEOUT_SECONDS),
+                        max_output_tokens=max(
+                            stage_config.max_output_tokens,
+                            MIN_STAGE_REVIEW_OUTPUT_TOKENS,
+                        ),
+                    )
+                )
+                stage_local.reviewer = stage_reviewer
+            return stage_reviewer
+
+        stage_reviewer_factory = configured_stage_reviewer
     cache_path = output_dir / "case-cache.jsonl"
     journal = AppendOnlyCaseJournal(cache_path)
     cached = journal.load() if resume else {}
@@ -239,6 +280,7 @@ def run_benchmark(
                 policy_sha256=policy_sha256,
                 manifest_sha256=manifest_sha256,
                 worktree_sha256=worktree_sha256,
+                min_confidence=min_confidence,
             )
             cached_result = cached.get(cache_key)
             if cached_result is not None:
@@ -250,6 +292,11 @@ def run_benchmark(
         arm_index, case_index, arm, case, cache_key = job
         resolved = resolve_case(asb_root, case)
         reviewer = reviewer_factory() if arm is Arm.HYBRID and reviewer_factory else None
+        stage_reviewer = (
+            stage_reviewer_factory()
+            if arm is Arm.HYBRID and stage_reviewer_factory
+            else None
+        )
         result = case_runner(
             case,
             resolved,
@@ -258,6 +305,8 @@ def run_benchmark(
             backend=backend_factory(resolved, arm),
             policy=policy,
             reviewer=reviewer,
+            stage_reviewer=stage_reviewer,
+            min_confidence=min_confidence,
         )
         return arm_index, case_index, cache_key, result
 
@@ -293,10 +342,27 @@ def run_benchmark(
         for case_index in range(len(cases))
     ]
     rows = [result.as_dict() for result in results]
+    step_rows = [
+        {
+            "case_id": result.case_id,
+            "arm": result.arm,
+            "step_index": step_index,
+            **record,
+        }
+        for result in results
+        for step_index, record in enumerate(result.stage_records)
+    ]
     analysis = analyze_results(rows)
     _write_private(
         output_dir / "cases.jsonl",
         "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows),
+    )
+    _write_private(
+        output_dir / "steps.jsonl",
+        "".join(
+            json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+            for row in step_rows
+        ),
     )
     _write_private(
         output_dir / "analysis.json",
@@ -312,9 +378,15 @@ def run_benchmark(
         "agent_model_fingerprint": agent_model_fingerprint,
         "reviewer_model_fingerprint": reviewer_model_fingerprint,
         "prompt_version": TOOL_RESULT_REVIEW_PROMPT_VERSION,
+        "stage_prompt_versions": {
+            "agent_input": AGENT_INPUT_REVIEW_PROMPT_VERSION,
+            "tool_metadata": TOOL_METADATA_REVIEW_PROMPT_VERSION,
+            "pre_tool": TOOL_REQUEST_REVIEW_PROMPT_VERSION,
+        },
         "policy_sha256": (
             policy_sha256
         ),
+        "min_confidence": min_confidence,
         "manifest_sha256": manifest_sha256,
         "official_harness": True,
         "metric": "official_asr_only",
@@ -353,11 +425,17 @@ def _cache_key(
     policy_sha256: str,
     manifest_sha256: str,
     worktree_sha256: str,
+    min_confidence: float,
 ) -> str:
     return _hash_json(
         {
             "adapter_version": ADAPTER_VERSION,
             "prompt_version": TOOL_RESULT_REVIEW_PROMPT_VERSION,
+            "stage_prompt_versions": {
+                "agent_input": AGENT_INPUT_REVIEW_PROMPT_VERSION,
+                "tool_metadata": TOOL_METADATA_REVIEW_PROMPT_VERSION,
+                "pre_tool": TOOL_REQUEST_REVIEW_PROMPT_VERSION,
+            },
             "asb_commit": case.asb_commit,
             "case": case.as_dict(),
             "arm": arm.value,
@@ -366,6 +444,7 @@ def _cache_key(
             "policy_sha256": policy_sha256,
             "manifest_sha256": manifest_sha256,
             "worktree_sha256": worktree_sha256,
+            "min_confidence": min_confidence,
         }
     )
 

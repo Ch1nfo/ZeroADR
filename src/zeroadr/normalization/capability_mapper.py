@@ -18,6 +18,32 @@ NETWORK_NAMES = ("fetch", "request", "http", "curl", "wget", "navigate")
 NETWORK_POST_NAMES = ("post", "http_post", "webhook")
 MESSAGE_SEND_NAMES = ("send_message", "message_send")
 EMAIL_SEND_NAMES = ("send_email", "email_send")
+DATA_READ_NAMES = (
+    "search",
+    "query",
+    "lookup",
+    "list",
+    "monitor",
+    "database",
+    "inspect",
+    "view",
+)
+DATA_TRANSFORM_NAMES = (
+    "summar",
+    "analy",
+    "calculat",
+    "validat",
+    "verify",
+    "report",
+    "forecast",
+    "recommend",
+    "classif",
+    "convert",
+    "parse",
+    "format",
+    "evaluat",
+)
+SYSTEM_MANAGE_NAMES = ("manage", "update", "backup", "configure", "maintain")
 TARGET_KEYS = ("path", "file", "filename", "command", "cmd", "url", "uri", "endpoint")
 
 
@@ -42,6 +68,12 @@ def map_capability(
         capability = "filesystem.read"
     elif any(name in haystack for name in SHELL_NAMES):
         capability = "shell.exec"
+    elif any(name in haystack for name in DATA_READ_NAMES):
+        capability = "data.read"
+    elif any(name in haystack for name in DATA_TRANSFORM_NAMES):
+        capability = "data.transform"
+    elif any(name in haystack for name in SYSTEM_MANAGE_NAMES):
+        capability = "system.manage"
     return CapabilityMapping(capability=capability, target=extract_target(arguments))
 
 

@@ -33,6 +33,7 @@ from zeroadr.llm.config import (
     resolve_llm_gate_config,
 )
 from zeroadr.llm.adjudication import build_llm_adjudicator
+from zeroadr.llm.stage_review import build_stage_reviewer
 from zeroadr.llm.calibration import (
     GateCalibrationError,
     build_gate_metrics,
@@ -377,6 +378,11 @@ def _run_hook_decide(args: Any) -> int:
             if policy_engine.has_llm_adjudication()
             else None
         ),
+        stage_reviewer=(
+            build_stage_reviewer(Path(args.llm_config))
+            if policy_engine.has_stage_review()
+            else None
+        ),
     )
     response = runtime.handle(hook_event_from_client_payload(payload, client=args.client))
     print(response.model_dump_json())
@@ -413,6 +419,11 @@ def _run_hook_decide_and_wait(args: Any) -> int:
         adjudicator=(
             build_llm_adjudicator(Path(args.llm_config))
             if policy_engine.has_llm_adjudication()
+            else None
+        ),
+        stage_reviewer=(
+            build_stage_reviewer(Path(args.llm_config))
+            if policy_engine.has_stage_review()
             else None
         ),
     )

@@ -61,7 +61,7 @@ class LLMAdjudication(BaseModel):
     created_at: datetime
     status: AnalysisStatus
     mode: AdjudicationMode
-    stage: Literal["pre_tool", "tool_result"] = "pre_tool"
+    stage: Literal["agent_input", "tool_metadata", "pre_tool", "tool_result"] = "pre_tool"
     provider: str
     model: str
     prompt_version: str

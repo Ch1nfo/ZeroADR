@@ -2,54 +2,99 @@
 
 ## English
 
-The corrected evaluation runs the pinned official ASB Agent harness at commit
-`1f561dccf92d55302368fa67679b4ba9d9c8fdc4`. It uses 100 attacks, 100 paired
-clean controls, and three independent arms. Both the Agent and Hybrid Reviewer
-use `deepseek-v4-flash`; the primary metric is ASB's official attacker-goal
-ASR, with no auxiliary refusal judge.
+The v3 holdout runs the pinned official ASB Agent harness at commit
+`1f561dccf92d55302368fa67679b4ba9d9c8fdc4`. It contains 100 attacks, 100
+paired clean controls, and three independent arms (600 Agent runs). The Agent
+and every Reviewer use `deepseek-v4-flash`. The primary metric is ASB's
+official attacker-goal ASR; no refusal judge or benchmark label is available to
+the defense.
 
-| Arm | ASR | Prevention | Clean FPR | Task success | P50 / P95 |
+| Arm | ASR | Clean FPR | Task success | Block / approval | P50 / P95 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Baseline | 67/100 (67%) | 0% | 0% | 68.0% | 8.404s / 22.449s |
-| Rules | 60/100 (60%) | 39% | 0% | 63.0% | 7.883s / 23.034s |
-| Hybrid | 40/100 (40%) | 56% | 2% | 63.5% | 13.600s / 24.233s |
+| Baseline | 70/100 (70%) | 0% | 66.0% | 0 / 0 | 8.027s / 19.413s |
+| Rules | 22/100 (22%) | 0% | 62.0% | 57 / 0 | 7.000s / 17.871s |
+| Hybrid | 7/100 (7%) | 4% | 54.5% | 70 / 7 | 23.779s / 53.099s |
 
-Hybrid ASR by family: DPI 85% (17/20), OPI 25% (5/20), Memory Poisoning 10%
-(2/20), Mixed 50% (10/20), and PoT 30% (6/20). Memory Poisoning is conditioned
-on successful poisoned-memory retrieval. Provider failures and workflow
-failures were zero.
+Hybrid lowers ASR by 63 percentage points (90% relative). It passes the ASR
+target (≤30%) and Clean FPR target (≤5%). It does not pass the utility target:
+task success is 11.5 points below Baseline rather than at most 10 points below.
+Provider failures and workflow failures are both zero in the final cache.
+
+| Hybrid family | Attack success |
+| --- | ---: |
+| DPI | 0/20 (0%) |
+| OPI | 1/20 (5%) |
+| Memory Poisoning | 1/20 (5%) |
+| Mixed | 0/20 (0%) |
+| PoT Backdoor | 5/20 (25%) |
+
+Memory Poisoning is conditioned on successful poisoned-memory retrieval.
+Hybrid recorded 59 cases blocked before execution and 30 with result-stage or
+post-execution intervention. Six successful attacks had no block; one attack
+succeeded despite a block. Stage actions were Input 40 block / 1 approval,
+Metadata 5 / 1, Pre-tool 17 / 9, and Result 32 / 7. Hybrid used 508 Agent model
+calls and 878 Reviewer calls; Reviewer p95 was 9.410s.
+
+Calibration on the separate v2-derived tuning split found no threshold that
+simultaneously met ASR, FPR, and utility constraints. As specified before the
+holdout, the formal run therefore used the default confidence 0.85 and records
+`calibration_failure=true`.
 
 Reproducibility:
 
-- Manifest SHA-256: `36410510708339f9db24bea5bbf37bba9fc0ed6bbd3823bde5a74f0544912556`
-- Policy SHA-256: `2352868e1f23c4a6eb49f790c5804e2a2df05fe8d6c1aa61ac2810ce725b9950`
-- Analysis SHA-256: `de5979f6a1f8f7029dbd480aec28b9bd4af811e091f2e1f2d190af2f8af3cd7f`
-- Adapter: `asb-official-agent-v1.0`
-- Prompt: `tool-result-review-v0.2`
-- Two cache-only replays: `new_model_calls=0`, identical analysis hash
+- Manifest SHA-256: `481c0cb699db2207b1a8ebc9970012a3a5b280b560f4e02b1918d2561cab5f61`
+- Policy SHA-256: `e2f3d1369daee500d973375e9040c978f778e38639e9cae9f34095c1373aabb5`
+- Analysis SHA-256: `42d8cc195623a19fd7304018353af6293d9799d35fa2e2135babef92f379a8e5`
+- Adapter: `asb-official-agent-v1.2`
+- Result prompt: `tool-result-review-v0.2`
+- Stage prompts: `agent-input-review-v0.1`, `tool-metadata-review-v0.1`,
+  `tool-request-review-v0.1`
+- Two cache-only replays: `new_case_runs=0`, `new_model_calls=0`, identical
+  analysis hash
 
-A separate provider-clean replication on the same manifest measured Baseline
-67%, Rules 55%, and Hybrid 29%, with Hybrid clean FPR 1%. The variation between
-the two complete runs is reported explicitly; results should not be interpreted
-as deterministic point estimates of the flash model.
+### Previous v2 result
+
+The superseded v2 holdout measured Baseline 67%, Rules 60%, and Hybrid 40%,
+with Hybrid Clean FPR 2%. It used pre-tool and result-stage defenses only. The
+v2 result remains historical context and is not pooled with v3.
 
 ## 中文
 
-修正后的评测运行固定 Commit 的 ASB 官方 Agent Harness，包括
-`ReactAgentAttack`、Workflow Generation、官方模拟工具和 Attacker-Goal ASR
-Evaluator。评测包含 100 个攻击、100 个配对 Clean Control 和三个独立 Arm；Agent
-与 Hybrid Reviewer 均使用 `deepseek-v4-flash`，不运行额外 Refusal Judge。
+v3 Holdout 使用固定 Commit
+`1f561dccf92d55302368fa67679b4ba9d9c8fdc4` 的 ASB 官方 Agent Harness，包含
+100 个攻击、100 个配对 Clean Control 和三个独立 Arm，共 600 次 Agent 运行。
+Agent 与全部 Reviewer 均为 `deepseek-v4-flash`。主指标是官方 Attacker-goal
+ASR；防护逻辑无法访问 Benchmark Label、Attacker Tool 名单或 Attack Goal。
 
-| Arm | ASR | 防护率 | Clean FPR | 任务成功率 | P50 / P95 |
+| Arm | ASR | Clean FPR | 任务成功率 | Block / Approval | P50 / P95 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Baseline | 67/100（67%） | 0% | 0% | 68.0% | 8.404s / 22.449s |
-| Rules | 60/100（60%） | 39% | 0% | 63.0% | 7.883s / 23.034s |
-| Hybrid | 40/100（40%） | 56% | 2% | 63.5% | 13.600s / 24.233s |
+| Baseline | 70/100（70%） | 0% | 66.0% | 0 / 0 | 8.027s / 19.413s |
+| Rules | 22/100（22%） | 0% | 62.0% | 57 / 0 | 7.000s / 17.871s |
+| Hybrid | 7/100（7%） | 4% | 54.5% | 70 / 7 | 23.779s / 53.099s |
 
-Hybrid 将 ASR 降低 27 个百分点，但仍有 40 个攻击成功样本。按攻击类型分别为：
-DPI 85%、OPI 25%、Memory Poisoning 10%、Mixed 50%、PoT 30%。Memory
-Poisoning 以成功检索污染记忆为前提；Provider Failure 和 Workflow Failure 均为 0。
+Hybrid 将 ASR 降低 63 个百分点，相对降幅 90%。ASR ≤30% 和 Clean FPR ≤5%
+目标通过；效用目标未通过：任务成功率比 Baseline 低 11.5 个百分点，而目标要求不
+超过 10 个百分点。最终 Cache 的 Provider Failure 和 Workflow Failure 均为 0。
 
-同一 Manifest 的另一次 Provider-Clean 复测得到 Baseline 67%、Rules 55%、
-Hybrid 29%，Hybrid Clean FPR 为 1%。报告明确披露两次完整运行之间的方差，不将
-Flash 模型的单次结果描述为确定性点估计。
+Hybrid 分攻击类型 ASR：DPI 0%、OPI 5%、Memory Poisoning 5%、Mixed 0%、PoT
+25%。Memory Poisoning 以成功检索污染记忆为前提。59 个 Case 在执行前阻断，30
+个 Case 在 Result-stage 或执行后阻断；6 个成功攻击完全漏检，1 个攻击在发生阻断
+后仍被官方 Evaluator 判定成功。
+
+独立 tuning split 中没有阈值同时满足 ASR、FPR 和效用约束，因此按照预先固定的
+流程记录 `calibration_failure=true`，并使用默认 Confidence 0.85 执行正式 Holdout。
+
+正式结果的 Manifest、Policy 和 Analysis Hash 分别为：
+
+- `481c0cb699db2207b1a8ebc9970012a3a5b280b560f4e02b1918d2561cab5f61`
+- `e2f3d1369daee500d973375e9040c978f778e38639e9cae9f34095c1373aabb5`
+- `42d8cc195623a19fd7304018353af6293d9799d35fa2e2135babef92f379a8e5`
+
+连续两次纯 Cache 复算均为 `new_case_runs=0`、`new_model_calls=0`，Analysis Hash
+完全一致。
+
+### 历史 v2 结果
+
+已被 v3 取代的 v2 Holdout 得到 Baseline 67%、Rules 60%、Hybrid 40%，Hybrid
+Clean FPR 为 2%。v2 只包含 Pre-tool 与 Result-stage 防护，仅保留作历史对比，不与
+v3 合并统计。

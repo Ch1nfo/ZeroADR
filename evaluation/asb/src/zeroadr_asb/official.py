@@ -13,8 +13,11 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, cast
 
 from zeroadr.core.events import RuntimeEvent, new_event
+from zeroadr.core.findings import Finding
 from zeroadr.detection.engine import DetectionEngine
 from zeroadr.policy.engine import PolicyEngine
+from zeroadr.normalization.capability_mapper import map_capability
+from zeroadr.runtime.security_coordinator import RuntimeSecurityCoordinator, StageReviewer
 from zeroadr_asb.adapter import ResolvedASBCase
 from zeroadr_asb.manifest import ASBCase
 from zeroadr_asb.runner import (
@@ -83,6 +86,19 @@ class _NullLogger:
         del content, level
 
 
+@dataclass(frozen=True, slots=True)
+class DefenseContext:
+    session_id: str
+    agent_visible_input: str | None = None
+    visible_tool_schemas: tuple[dict[str, Any], ...] = ()
+    runtime_events: tuple[RuntimeEvent, ...] = ()
+    tool_name: str | None = None
+    arguments: dict[str, Any] | None = None
+    capability: str | None = None
+    target: str | None = None
+    tool_result: Any | None = None
+
+
 class ZeroADRToolGate:
     """Production-equivalent gate that receives runtime-visible evidence only."""
 
@@ -94,6 +110,7 @@ class ZeroADRToolGate:
         engine: DetectionEngine,
         policy: PolicyEngine,
         reviewer: ResultReviewer | None = None,
+        stage_reviewer: StageReviewer | None = None,
         min_confidence: float = 0.85,
     ) -> None:
         self.arm = arm
@@ -101,6 +118,12 @@ class ZeroADRToolGate:
         self.engine = engine
         self.policy = policy
         self.reviewer = reviewer
+        self.coordinator = RuntimeSecurityCoordinator(
+            policy_engine=_policy_for_arm(policy, arm),
+            reviewer=stage_reviewer,
+        )
+        self.stage_reviewer = stage_reviewer
+        self._stage_calls_before = int(getattr(stage_reviewer, "model_calls", 0))
         self.min_confidence = min_confidence
         self.effective_action = "allow"
         self.reviewer_model_calls = 0
@@ -108,12 +131,82 @@ class ZeroADRToolGate:
         self.provider_failure = False
         self.provider_error_codes: list[str] = []
         self.detection_policy_latency_ms = 0
+        self.step_records: list[dict[str, Any]] = []
+
+    @property
+    def stage_reviewer_model_calls(self) -> int:
+        return max(
+            0,
+            int(getattr(self.stage_reviewer, "model_calls", 0)) - self._stage_calls_before,
+        )
+
+    def review_input(self, content: str) -> ToolDecision:
+        if self.arm is Arm.BASELINE or self.policy.agent_input_gate is None:
+            return ToolDecision("allow", False, "input_gate_disabled")
+        event = new_event(
+            event_type="agent.input.received",
+            source_type="replay",
+            session_id=self.session_id,
+            capability="agent.input",
+            arguments={"content": content},
+        )
+        decision = self.coordinator.review_agent_input(event)
+        result = ToolDecision(
+            decision.effective_action,  # type: ignore[arg-type]
+            decision.record.verdict is not None,
+            "agent_input_gate",
+        )
+        self._record(result)
+        self._capture_stage_failure(decision.record)
+        self._append_step(decision.record, executed=False, delivered=False)
+        return result
+
+    def review_metadata(self, schema: dict[str, Any]) -> ToolDecision:
+        if self.arm is Arm.BASELINE or self.policy.tool_metadata_gate is None:
+            return ToolDecision("allow", False, "metadata_gate_disabled")
+        function = schema.get("function")
+        payload = function if isinstance(function, dict) else schema
+        name_value = payload.get("name")
+        name = name_value if isinstance(name_value, str) else None
+        description_value = payload.get("description")
+        description = description_value if isinstance(description_value, str) else None
+        mapping = map_capability(name, None, description)
+        event = new_event(
+            event_type="tool.metadata.discovered",
+            source_type="replay",
+            session_id=self.session_id,
+            tool_name=name,
+            capability=mapping.capability,
+            arguments=payload,
+        )
+        decision = self.coordinator.review_tool_metadata(event)
+        result = ToolDecision(
+            decision.effective_action,  # type: ignore[arg-type]
+            decision.record.verdict is not None,
+            "tool_metadata_gate",
+        )
+        self._record(result)
+        self._capture_stage_failure(decision.record)
+        self._append_step(decision.record, executed=False, delivered=False)
+        return result
 
     def review_request(self, event: RuntimeEvent) -> ToolDecision:
         if self.arm is Arm.BASELINE:
             return ToolDecision("allow", False, "baseline")
+        if self.policy.tool_request_gate is not None:
+            gate_decision = self.coordinator.review_tool_request(event)
+            result = ToolDecision(
+                gate_decision.effective_action,  # type: ignore[arg-type]
+                gate_decision.record.verdict is not None,
+                "tool_request_gate",
+            )
+            self._record(result)
+            self._capture_stage_failure(gate_decision.record)
+            self._append_step(gate_decision.record, executed=False, delivered=False)
+            return result
         started = time.monotonic()
         findings = self.engine.detect(event)
+        self.coordinator.observe_findings(event, findings)
         policy_decision = self.policy.evaluate(event, findings)
         self.detection_policy_latency_ms += int((time.monotonic() - started) * 1000)
         action = policy_decision.action
@@ -128,6 +221,7 @@ class ZeroADRToolGate:
             return ToolDecision("allow", False, "baseline")
         started = time.monotonic()
         findings = self.engine.detect(event)
+        self.coordinator.observe_findings(event, findings)
         policy_decision = self.policy.evaluate(event, findings)
         self.detection_policy_latency_ms += int((time.monotonic() - started) * 1000)
         if self.arm is Arm.RULES or any(item.severity == "critical" for item in findings):
@@ -136,6 +230,7 @@ class ZeroADRToolGate:
                 action = "allow"
             decision = ToolDecision(action, False, policy_decision.reason)
             self._record(decision)
+            self._append_result_step(event, findings, decision)
             return decision
         adjudication: tuple[str, float] | None = None
         if self.reviewer is None:
@@ -159,12 +254,87 @@ class ZeroADRToolGate:
             self.min_confidence,
         )
         self._record(decision)
+        self._append_result_step(event, findings, decision)
         return decision
 
     def _record(self, decision: ToolDecision) -> None:
         ranks = {"allow": 0, "require_approval": 1, "block": 2}
         if ranks[decision.action] > ranks[self.effective_action]:
             self.effective_action = decision.action
+
+    def _append_step(self, record: Any, *, executed: bool, delivered: bool) -> None:
+        self.step_records.append(
+            {
+                "step_index": len(self.step_records),
+                "stage": record.stage,
+                "capability": record.capability,
+                "schema_sha256": record.schema_sha256,
+                "rule_ids": record.rule_ids,
+                "verdict": record.verdict,
+                "confidence": record.confidence,
+                "action": record.effective_action,
+                "tool_executed": executed,
+                "result_delivered": delivered,
+                "session_compromised": record.session_compromised,
+                "latency_ms": record.latency_ms,
+            }
+        )
+
+    def _capture_stage_failure(self, record: Any) -> None:
+        if record.error_code:
+            self.provider_failure = True
+            self.provider_error_codes.append(str(record.error_code))
+
+    def _append_result_step(
+        self,
+        event: RuntimeEvent,
+        findings: list[Finding],
+        decision: ToolDecision,
+    ) -> None:
+        self.step_records.append(
+            {
+                "step_index": len(self.step_records),
+                "stage": "tool_result",
+                "capability": event.capability,
+                "schema_sha256": None,
+                "rule_ids": [item.rule_id for item in findings],
+                "verdict": None,
+                "confidence": None,
+                "action": decision.action,
+                "tool_executed": True,
+                "result_delivered": decision.action == "allow",
+                "session_compromised": self.coordinator.session_state(
+                    event.session_id
+                ).compromised,
+                "latency_ms": 0,
+            }
+        )
+
+
+def _policy_for_arm(policy: PolicyEngine, arm: Arm) -> PolicyEngine:
+    if arm is not Arm.RULES:
+        return policy
+    return PolicyEngine(
+        mode=policy.mode,
+        policies=policy.policies,
+        tool_result_gate=policy.tool_result_gate,
+        agent_input_gate=(
+            policy.agent_input_gate.model_copy(update={"review": "rules"})
+            if policy.agent_input_gate
+            else None
+        ),
+        tool_metadata_gate=(
+            policy.tool_metadata_gate.model_copy(update={"review": "rules"})
+            if policy.tool_metadata_gate
+            else None
+        ),
+        tool_request_gate=(
+            policy.tool_request_gate.model_copy(update={"review": "rules"})
+            if policy.tool_request_gate
+            else None
+        ),
+        session_guard=policy.session_guard,
+    )
 
 
 def build_official_args(asb_root: Path, case: ASBCase) -> OfficialASBArgs:
@@ -245,6 +415,7 @@ def run_official_case(
     backend: AgentBackend,
     policy: PolicyEngine,
     reviewer: ResultReviewer | None = None,
+    stage_reviewer: StageReviewer | None = None,
     min_confidence: float = 0.85,
 ) -> CaseResult:
     started = time.monotonic()
@@ -255,6 +426,7 @@ def run_official_case(
         engine=DetectionEngine(),
         policy=policy,
         reviewer=reviewer,
+        stage_reviewer=stage_reviewer,
         min_confidence=min_confidence,
     )
     official_class = load_official_agent_class(asb_root, case.agent_path)
@@ -274,6 +446,7 @@ def run_official_case(
     rate_limit_before = int(getattr(backend, "rate_limit_count", 0))
     http_error_before = int(getattr(backend, "http_error_count", 0))
     invalid_before = int(getattr(backend, "invalid_response_count", 0))
+    agent: Any | None = None
     try:
         agent = agent_class(
             agent_name=case.agent_path,
@@ -290,6 +463,8 @@ def run_official_case(
         )
         result = agent.run()
         workflow_failure = bool(result.get("workflow_failure", False))
+        if bool(getattr(agent, "_zeroadr_input_blocked", False)):
+            workflow_failure = False
         if workflow_failure:
             workflow_failure_reason = "official_workflow_generation_failed"
         asr_started = time.monotonic()
@@ -329,7 +504,7 @@ def run_official_case(
         provider_failure=provider_failure,
         agent_model_calls=agent_calls,
         refusal_judge_calls=0,
-        reviewer_model_calls=gate.reviewer_model_calls,
+        reviewer_model_calls=gate.reviewer_model_calls + gate.stage_reviewer_model_calls,
         latency_ms=int((time.monotonic() - started) * 1000),
         reviewer_latency_ms=gate.reviewer_latency_ms,
         provider_error_codes=provider_errors,
@@ -345,6 +520,8 @@ def run_official_case(
             int(getattr(backend, "invalid_response_count", 0)) - invalid_before
         ),
         official_harness=True,
+        stage_records=gate.step_records,
+        input_blocked=bool(getattr(agent, "_zeroadr_input_blocked", False)),
     )
 
 
@@ -355,6 +532,8 @@ def _instrumented_agent_class(official_class: type[Any]) -> type[Any]:
             self._zeroadr_gate = kwargs.pop("zeroadr_gate")
             self._zeroadr_asb_root = Path(kwargs.pop("zeroadr_asb_root"))
             super().__init__(*args, **kwargs)
+            self._zeroadr_initial_gates_applied = False
+            self._zeroadr_input_blocked = False
 
         def setup_logger(self) -> _NullLogger:
             return _NullLogger()
@@ -372,6 +551,40 @@ def _instrumented_agent_class(official_class: type[Any]) -> type[Any]:
             return response_type(reply.content, tool_calls or None), [started], [ended], [0.0], [ended - started]
 
         def automatic_workflow(self) -> Any:
+            if not self._zeroadr_initial_gates_applied:
+                self._zeroadr_initial_gates_applied = True
+                visible_input = next(
+                    (
+                        str(item.get("content", ""))
+                        for item in reversed(self.messages)
+                        if item.get("role") == "user"
+                    ),
+                    str(self.task_input),
+                )
+                input_decision = self._zeroadr_gate.review_input(visible_input)
+                if input_decision.action in {"block", "require_approval"}:
+                    self._zeroadr_input_blocked = True
+                    return None
+                retained_schemas: list[dict[str, Any]] = []
+                blocked_names: set[str] = set()
+                tools = cast(list[Any], getattr(self, "tools", []))
+                for schema in list(tools):
+                    if not isinstance(schema, dict):
+                        continue
+                    metadata_decision = self._zeroadr_gate.review_metadata(schema)
+                    function = schema.get("function")
+                    payload = function if isinstance(function, dict) else schema
+                    name = payload.get("name")
+                    if metadata_decision.action in {"block", "require_approval"}:
+                        if isinstance(name, str):
+                            blocked_names.add(name)
+                        continue
+                    retained_schemas.append(schema)
+                if blocked_names:
+                    setattr(self, "tools", retained_schemas)
+                    tool_list = cast(dict[str, Any], getattr(self, "tool_list", {}))
+                    for name in blocked_names:
+                        tool_list.pop(name, None)
             query_type = _official_query_type(self._zeroadr_asb_root)
             for attempt in range(self.plan_max_fail_times):
                 response, start_times, _, waiting_times, turnaround_times = self.get_response(
@@ -418,12 +631,15 @@ def _instrumented_agent_class(official_class: type[Any]) -> type[Any]:
                 arguments = call.get("parameters")
                 if not isinstance(arguments, dict):
                     arguments = {}
+                schema = _find_tool_schema(self.tools, name)
+                description = _tool_description(schema)
+                mapping = map_capability(name, arguments, description)
                 request = new_event(
                     event_type="tool.call.requested",
                     source_type="replay",
                     session_id=self._zeroadr_gate.session_id,
                     tool_name=name,
-                    capability="tool.call",
+                    capability=mapping.capability,
                     arguments=arguments,
                 )
                 pre = self._zeroadr_gate.review_request(request)
@@ -432,6 +648,11 @@ def _instrumented_agent_class(official_class: type[Any]) -> type[Any]:
                     observations.append("[ZeroADR blocked an unsafe tool call.]")
                     continue
                 item_actions, item_observations, item_success = super().call_tools([call], final_stage)
+                if (
+                    self._zeroadr_gate.step_records
+                    and self._zeroadr_gate.step_records[-1].get("stage") == "pre_tool"
+                ):
+                    self._zeroadr_gate.step_records[-1]["tool_executed"] = True
                 actions.extend(item_actions)
                 success = success and item_success
                 for observation in item_observations:
@@ -440,7 +661,7 @@ def _instrumented_agent_class(official_class: type[Any]) -> type[Any]:
                         source_type="replay",
                         session_id=self._zeroadr_gate.session_id,
                         tool_name=name,
-                        capability="tool.result",
+                        capability=mapping.capability,
                         result={"content": observation},
                     )
                     post = self._zeroadr_gate.review_result(event)
@@ -531,6 +752,26 @@ def _normalise_backend_calls(calls: Any) -> list[AgentToolCall]:
             name, arguments = call
             result.append(AgentToolCall(f"official-{index}", str(name), dict(arguments)))
     return result
+
+
+def _find_tool_schema(tools: list[Any], name: str) -> dict[str, Any] | None:
+    for schema in tools:
+        if not isinstance(schema, dict):
+            continue
+        function = schema.get("function")
+        payload = function if isinstance(function, dict) else schema
+        if payload.get("name") == name:
+            return schema
+    return None
+
+
+def _tool_description(schema: dict[str, Any] | None) -> str | None:
+    if schema is None:
+        return None
+    function = schema.get("function")
+    payload = function if isinstance(function, dict) else schema
+    value = payload.get("description")
+    return value if isinstance(value, str) else None
 
 
 def _install_optional_import_compatibility() -> None:

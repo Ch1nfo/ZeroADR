@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from zeroadr.core.policies import PolicyAction
 
-HookEventType = Literal["pre_tool_use", "post_tool_use"]
+HookEventType = Literal["agent_input", "pre_tool_use", "post_tool_use"]
 
 
 class HookEvent(BaseModel):

@@ -8,7 +8,14 @@ from typing import Any
 
 from zeroadr_asb.analysis import analyze_results
 from zeroadr_asb.benchmark import run_benchmark, run_concurrency_sweep
-from zeroadr_asb.manifest import ASB_COMMIT, ASB_SEED, build_manifest, write_manifest
+from zeroadr_asb.manifest import (
+    ASB_COMMIT,
+    ASB_SEED,
+    build_manifest,
+    load_manifest,
+    split_manifest,
+    write_manifest,
+)
 from zeroadr_asb.source import prepare_asb_source, verify_asb_source
 
 
@@ -28,6 +35,14 @@ def build_parser() -> argparse.ArgumentParser:
     manifest.add_argument("--paired-clean", action=argparse.BooleanOptionalAction, default=True)
     manifest.add_argument("--seed", default=ASB_SEED)
     manifest.add_argument("--output", default=str(DEFAULT_ROOT / "manifest-asb-100-v2.jsonl"))
+    manifest.add_argument("--exclude-manifest")
+    split = commands.add_parser("split")
+    split.add_argument(
+        "--manifest", default=str(DEFAULT_ROOT / "manifest-asb-100-v2.jsonl")
+    )
+    split.add_argument("--pairs-per-family", type=int, default=5)
+    split.add_argument("--seed", default="zeroadr-asb-v12-tuning-v1")
+    split.add_argument("--output", default=str(DEFAULT_ROOT / "tuning.jsonl"))
     run = commands.add_parser("run")
     _add_run_args(run)
     run.add_argument("--asb-root", default=str(DEFAULT_ASB_ROOT))
@@ -52,6 +67,11 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--output-dir", default=str(DEFAULT_ROOT / "formal"))
+    parser.add_argument(
+        "--policy",
+        default=str(Path(__file__).resolve().parent / "policies/asb-v12-enforce.yaml"),
+    )
+    parser.add_argument("--min-confidence", type=float, default=0.85)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -64,6 +84,19 @@ def main(argv: list[str] | None = None) -> int:
                 Path(args.asb_root),
                 attack_cases=args.attack_cases,
                 paired_clean=args.paired_clean,
+                seed=args.seed,
+                exclude_cases=(
+                    load_manifest(Path(args.exclude_manifest))
+                    if args.exclude_manifest
+                    else None
+                ),
+            )
+            write_manifest(Path(args.output), cases)
+            return _print({"ok": True, "case_count": len(cases), "output": args.output})
+        if args.command_name == "split":
+            cases = split_manifest(
+                load_manifest(Path(args.manifest)),
+                pairs_per_family=args.pairs_per_family,
                 seed=args.seed,
             )
             write_manifest(Path(args.output), cases)
@@ -86,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
                 **({} if args.command_name == "sweep" else {"workers": args.workers}),
                 resume=args.resume,
                 dry_run=args.dry_run,
+                policy_path=Path(args.policy),
+                min_confidence=args.min_confidence,
             )
             return _print(result)
         if args.command_name == "analyze":

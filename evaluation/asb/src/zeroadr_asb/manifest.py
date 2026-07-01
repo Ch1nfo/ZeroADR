@@ -51,6 +51,7 @@ def build_manifest(
     attack_cases: int = 100,
     paired_clean: bool = True,
     seed: str = ASB_SEED,
+    exclude_cases: list[ASBCase] | None = None,
 ) -> list[ASBCase]:
     if attack_cases != 100:
         raise ASBManifestError("This manifest version requires exactly 100 attack cases.")
@@ -102,10 +103,39 @@ def build_manifest(
                 )
     if len(attacks) != attack_cases:
         raise ASBManifestError("Manifest construction did not produce 100 attack cases.")
+    if exclude_cases:
+        attacks = _replace_excluded_attacks(
+            attacks,
+            exclude_cases=exclude_cases,
+            standard_tasks=standard_tasks,
+            pot_tasks=pot_tasks,
+            tool_rows=tool_rows,
+            seed=seed,
+        )
     if not paired_clean:
         return attacks
     clean = [replace(case, case_id=f"{case.pair_id}:clean", label="clean") for case in attacks]
     return [item for pair in zip(attacks, clean) for item in pair]
+
+
+def split_manifest(
+    cases: list[ASBCase],
+    *,
+    pairs_per_family: int,
+    seed: str,
+) -> list[ASBCase]:
+    if pairs_per_family <= 0:
+        raise ASBManifestError("pairs_per_family must be positive.")
+    selected: set[str] = set()
+    for family in ALL_FAMILIES:
+        attacks = [
+            case for case in cases if case.label == "attack" and case.attack_family == family
+        ]
+        attacks.sort(key=lambda case: _digest(seed, family, case.pair_id))
+        if len(attacks) < pairs_per_family:
+            raise ASBManifestError(f"Not enough {family} pairs for requested split.")
+        selected.update(case.pair_id for case in attacks[:pairs_per_family])
+    return [case for case in cases if case.pair_id in selected]
 
 
 def write_manifest(path: Path, cases: list[ASBCase]) -> None:
@@ -173,6 +203,87 @@ def _select_tool(
         key=lambda row: _digest(seed, family, agent_name, slot, str(row["Attacker Tool"]))
     )
     return candidates[0]
+
+
+def _case_identity(case: ASBCase) -> tuple[object, ...]:
+    return (
+        case.attack_family,
+        case.agent_name,
+        case.task_index,
+        case.attacker_tool_sha256,
+        case.injection_template,
+        case.trigger,
+    )
+
+
+def _replace_excluded_attacks(
+    attacks: list[ASBCase],
+    *,
+    exclude_cases: list[ASBCase],
+    standard_tasks: list[dict[str, Any]],
+    pot_tasks: list[dict[str, Any]],
+    tool_rows: dict[bool, list[dict[str, Any]]],
+    seed: str,
+) -> list[ASBCase]:
+    excluded = {_case_identity(case) for case in exclude_cases if case.label == "attack"}
+    used: set[tuple[object, ...]] = set()
+    task_maps = {
+        False: {str(row["agent_name"]): row for row in standard_tasks},
+        True: {str(row["agent_name"]): row for row in pot_tasks},
+    }
+    resolved: list[ASBCase] = []
+    for original in attacks:
+        if _case_identity(original) not in excluded and _case_identity(original) not in used:
+            resolved.append(original)
+            used.add(_case_identity(original))
+            continue
+        task_row = task_maps[original.attack_family == "pot"][original.agent_name]
+        tools = [
+            row
+            for row in tool_rows[original.aggressive]
+            if row.get("Corresponding Agent") == original.agent_name
+            and row.get("Attack Type") == original.goal_type
+        ]
+        tools.sort(
+            key=lambda row: _digest(
+                seed,
+                original.attack_family,
+                original.agent_name,
+                str(row.get("Attacker Tool", "")),
+            )
+        )
+        candidates: list[ASBCase] = []
+        for tool in tools:
+            for offset in range(1, len(task_row["tasks"]) + 1):
+                task_index = (original.task_index + offset) % len(task_row["tasks"])
+                candidates.append(
+                    _case(
+                        family=original.attack_family,
+                        task_row=task_row,
+                        task_index=task_index,
+                        tool=tool,
+                        aggressive=original.aggressive,
+                        goal_type=original.goal_type,
+                        template=original.injection_template,
+                        trigger=original.trigger,
+                        seed=seed,
+                    )
+                )
+        replacement = next(
+            (
+                case
+                for case in candidates
+                if _case_identity(case) not in excluded and _case_identity(case) not in used
+            ),
+            None,
+        )
+        if replacement is None:
+            raise ASBManifestError(
+                f"Unable to avoid excluded identity for {original.attack_family}/{original.agent_name}."
+            )
+        resolved.append(replacement)
+        used.add(_case_identity(replacement))
+    return resolved
 
 
 def _template(family: str, index: int) -> str:

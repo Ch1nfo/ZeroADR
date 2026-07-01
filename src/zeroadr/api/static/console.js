@@ -333,6 +333,7 @@ const state = {
   selectedDecisions: [],
   selectedAdjudications: [],
   selectedToolResultGates: [],
+  selectedRuntimeGates: [],
   selectedFindingId: null,
   selectedEventId: null,
   capabilityFilter: "all",
@@ -680,6 +681,10 @@ async function loadSessionToolResultGates(sessionId) {
   return fetchJson(`/api/v0/sessions/${encodeURIComponent(sessionId)}/tool-result-gates`);
 }
 
+async function loadSessionRuntimeGates(sessionId) {
+  return fetchJson(`/api/v0/sessions/${encodeURIComponent(sessionId)}/runtime-gates`);
+}
+
 async function loadFindingEvidence(sessionId, findingId) {
   const encodedSession = encodeURIComponent(sessionId);
   const encodedFinding = encodeURIComponent(findingId);
@@ -859,7 +864,7 @@ async function selectSession(sessionId) {
   renderSessions();
   elements.sessionDetail.innerHTML = `<div class="empty-state">${escapeHtml(t("loadingDetail"))}</div>`;
   try {
-    const [detail, full, evidence, events, findings, decisions, adjudications, toolResultGates] = await Promise.all([
+    const [detail, full, evidence, events, findings, decisions, adjudications, toolResultGates, runtimeGates] = await Promise.all([
       loadSessionDetail(sessionId),
       loadSessionFull(sessionId),
       loadSessionEvidence(sessionId),
@@ -868,6 +873,7 @@ async function selectSession(sessionId) {
       loadSessionDecisions(sessionId),
       loadSessionAdjudications(sessionId),
       loadSessionToolResultGates(sessionId),
+      loadSessionRuntimeGates(sessionId),
     ]);
     state.selectedDetail = detail;
     state.selectedFull = full;
@@ -877,6 +883,7 @@ async function selectSession(sessionId) {
     state.selectedDecisions = decisions.policy_decisions || [];
     state.selectedAdjudications = adjudications.llm_adjudications || [];
     state.selectedToolResultGates = toolResultGates.tool_result_gates || [];
+    state.selectedRuntimeGates = runtimeGates.runtime_gates || [];
     state.selectedFindingId = null;
     state.selectedEventId = null;
     state.capabilityFilter = "all";
@@ -973,6 +980,7 @@ function renderSessionDetail(payload, fullPayload, evidencePayload) {
     fragment.getElementById("llm-adjudication-history"),
     state.selectedAdjudications || [],
     state.selectedToolResultGates || [],
+    state.selectedRuntimeGates || [],
   );
   renderBom(fragment.getElementById("bom-panel"), fullPayload.agent_bom || {});
   renderInventory(fragment.getElementById("inventory"), payload.inventory || {});
@@ -1304,8 +1312,8 @@ function renderPolicyHistory(target, decisions) {
     .join("");
 }
 
-function renderLLMAdjudications(target, adjudications, toolResultGates = []) {
-  if (!adjudications.length && !toolResultGates.length) {
+function renderLLMAdjudications(target, adjudications, toolResultGates = [], runtimeGates = []) {
+  if (!adjudications.length && !toolResultGates.length && !runtimeGates.length) {
     target.innerHTML = `<span class="meta">${escapeHtml(t("noAdjudications"))}</span>`;
     return;
   }
@@ -1315,6 +1323,14 @@ function renderLLMAdjudications(target, adjudications, toolResultGates = []) {
       <span>${escapeHtml(t("action"))}: ${escapeHtml(item.base_action || "-")} → ${escapeHtml(item.proposed_action || "-")} → ${escapeHtml(item.effective_action || "-")}</span>
       <span>Verdict: ${escapeHtml(item.verdict || item.error_code || "rules")}</span>
       <span>${escapeHtml(item.latency_ms || 0)} ms · ${escapeHtml(item.response_byte_count || 0)} bytes</span>
+    </article>
+  `).join("");
+  const runtimeGateRows = runtimeGates.map((item) => `
+    <article class="adjudication-row">
+      <strong>Runtime Gate · ${escapeHtml(item.stage || "-")} · ${escapeHtml(item.mode || "-")} · ${escapeHtml(item.review || "-")}</strong>
+      <span>${escapeHtml(t("action"))}: ${escapeHtml(item.base_action || "-")} → ${escapeHtml(item.proposed_action || "-")} → ${escapeHtml(item.effective_action || "-")}</span>
+      <span>Verdict: ${escapeHtml(item.verdict || item.error_code || "rules")} · Confidence: ${item.confidence == null ? "-" : escapeHtml(item.confidence)}</span>
+      <span>${escapeHtml(item.capability || "-")} · ${escapeHtml(item.latency_ms || 0)} ms · Compromised: ${escapeHtml(Boolean(item.session_compromised))}</span>
     </article>
   `).join("");
   const adjudicationRows = adjudications
@@ -1332,7 +1348,7 @@ function renderLLMAdjudications(target, adjudications, toolResultGates = []) {
       `;
     })
     .join("");
-  target.innerHTML = gateRows + adjudicationRows;
+  target.innerHTML = runtimeGateRows + gateRows + adjudicationRows;
 }
 
 function renderBom(target, bom) {

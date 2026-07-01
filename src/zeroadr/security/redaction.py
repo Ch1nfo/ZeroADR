@@ -23,6 +23,12 @@ PRIVATE_KEY_PATTERN = re.compile(
     r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
     re.DOTALL,
 )
+INLINE_SECRET_PATTERNS = (
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+)
 
 
 def redact_event(event: RuntimeEvent) -> RuntimeEvent:
@@ -63,6 +69,8 @@ def _is_sensitive_key(key: str) -> bool:
 def _redact_string(value: str) -> str:
     if PRIVATE_KEY_PATTERN.search(value):
         return REDACTED
+    for pattern in INLINE_SECRET_PATTERNS:
+        value = pattern.sub(REDACTED, value)
     lines = value.splitlines()
     if not lines:
         return value

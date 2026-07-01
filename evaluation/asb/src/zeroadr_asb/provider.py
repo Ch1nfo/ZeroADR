@@ -11,6 +11,8 @@ from zeroadr.core.events import RuntimeEvent
 from zeroadr.core.findings import Finding
 from zeroadr.llm.provider import LLMProviderError
 from zeroadr.llm.tool_result_review import OpenAICompatibleToolResultReviewer, build_tool_result_review_payload
+from zeroadr.llm.stage_review import OpenAICompatibleStageReviewer
+from zeroadr.core.runtime_gate import GateStage
 from zeroadr_asb.runner import AgentReply, AgentToolCall
 
 
@@ -133,6 +135,32 @@ class CoreToolResultReviewer:
             adjudication.result.confidence,
             adjudication.latency_ms,
             model_calls,
+        )
+
+
+class CoreStageReviewer:
+    def __init__(self, reviewer: OpenAICompatibleStageReviewer) -> None:
+        self.reviewer = reviewer
+        self.model = reviewer.model
+        self.prompt_version = reviewer.prompt_version
+
+    @property
+    def model_calls(self) -> int:
+        return self.reviewer.model_calls
+
+    def review(
+        self,
+        *,
+        stage: GateStage,
+        event: RuntimeEvent,
+        findings: list[Finding],
+        context: dict[str, Any],
+    ) -> tuple[str, float, int]:
+        return self.reviewer.review(
+            stage=stage,
+            event=event,
+            findings=findings,
+            context=context,
         )
 
 

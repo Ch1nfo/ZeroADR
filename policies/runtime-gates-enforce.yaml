@@ -1,0 +1,31 @@
+mode: enforce
+agent_input_gate:
+  mode: enforce
+  review: hybrid
+  min_confidence: 0.85
+  true_positive_action: block
+  false_positive_action: allow
+tool_metadata_gate:
+  mode: enforce
+  review: hybrid
+  min_confidence: 0.85
+  true_positive_action: block
+  false_positive_action: allow
+tool_request_gate:
+  mode: enforce
+  review: hybrid
+  min_confidence: 0.85
+  true_positive_action: block
+  false_positive_action: allow
+session_guard:
+  mode: enforce
+  compromised_action: require_approval
+policies:
+  - id: block-critical-runtime-risk
+    match:
+      severity: critical
+    action: block
+  - id: review-high-runtime-risk
+    match:
+      severity: high
+    action: require_approval

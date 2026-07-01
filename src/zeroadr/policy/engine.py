@@ -32,6 +32,23 @@ class ToolResultGatePolicy(BaseModel):
     max_buffer_bytes: int = Field(default=32 * 1024 * 1024, gt=0)
 
 
+class SemanticGatePolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["shadow", "enforce"] = "shadow"
+    review: Literal["rules", "hybrid"] = "rules"
+    min_confidence: float = Field(default=0.85, ge=0.0, le=1.0)
+    true_positive_action: PolicyAction = "block"
+    false_positive_action: PolicyAction = "allow"
+
+
+class SessionGuardPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["shadow", "enforce"] = "shadow"
+    compromised_action: PolicyAction = "require_approval"
+
+
 class PolicyEngine:
     def __init__(
         self,
@@ -39,10 +56,18 @@ class PolicyEngine:
         mode: str = "audit",
         policies: list[dict[str, Any]] | None = None,
         tool_result_gate: ToolResultGatePolicy | None = None,
+        agent_input_gate: SemanticGatePolicy | None = None,
+        tool_metadata_gate: SemanticGatePolicy | None = None,
+        tool_request_gate: SemanticGatePolicy | None = None,
+        session_guard: SessionGuardPolicy | None = None,
     ) -> None:
         self.mode = mode
         self.policies = policies or []
         self.tool_result_gate = tool_result_gate
+        self.agent_input_gate = agent_input_gate
+        self.tool_metadata_gate = tool_metadata_gate
+        self.tool_request_gate = tool_request_gate
+        self.session_guard = session_guard
 
     @classmethod
     def from_dict(cls, config: dict[str, Any]) -> "PolicyEngine":
@@ -52,10 +77,23 @@ class PolicyEngine:
             if gate_config is not None
             else None
         )
+        def semantic(name: str) -> SemanticGatePolicy | None:
+            value = config.get(name)
+            return SemanticGatePolicy.model_validate(value) if value is not None else None
+
+        guard_config = config.get("session_guard")
         return cls(
             mode=str(config.get("mode", "audit")),
             policies=list(config.get("policies", [])),
             tool_result_gate=gate,
+            agent_input_gate=semantic("agent_input_gate"),
+            tool_metadata_gate=semantic("tool_metadata_gate"),
+            tool_request_gate=semantic("tool_request_gate"),
+            session_guard=(
+                SessionGuardPolicy.model_validate(guard_config)
+                if guard_config is not None
+                else None
+            ),
         )
 
     @classmethod
@@ -113,6 +151,16 @@ class PolicyEngine:
 
     def has_llm_adjudication(self) -> bool:
         return any(policy.get("llm_adjudication") is not None for policy in self.policies)
+
+    def has_stage_review(self) -> bool:
+        return any(
+            gate is not None and gate.review == "hybrid"
+            for gate in (
+                self.agent_input_gate,
+                self.tool_metadata_gate,
+                self.tool_request_gate,
+            )
+        )
 
     def evaluate_finding(self, finding: Finding) -> PolicyDecision:
         for policy in self.policies:

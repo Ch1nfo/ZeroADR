@@ -19,6 +19,14 @@ def hook_event_from_client_payload(payload: dict[str, Any], *, client: HookClien
 
 def _claude_code_hook_event(payload: dict[str, Any]) -> HookEvent:
     hook_event_name = str(payload.get("hook_event_name", ""))
+    if hook_event_name == "UserPromptSubmit":
+        return HookEvent(
+            hook_event_type="agent_input",
+            session_id=str(payload.get("session_id", "unknown-session")),
+            request_id=payload.get("request_id"),
+            arguments={"content": str(payload.get("prompt", ""))},
+            raw=payload,
+        )
     hook_event_type = "post_tool_use" if hook_event_name == "PostToolUse" else "pre_tool_use"
     tool_input = payload.get("tool_input")
     arguments = _normalize_tool_input(tool_input if isinstance(tool_input, dict) else {})

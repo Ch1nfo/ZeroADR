@@ -4,7 +4,7 @@
 
 ### Runtime Detection, Response, and Policy Enforcement for AI Agents
 
-[![Version](https://img.shields.io/badge/version-1.1.0rc2-blue.svg)](#current-release)
+[![Version](https://img.shields.io/badge/version-1.2.0rc1-blue.svg)](#current-release)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#support-boundary)
@@ -48,6 +48,11 @@ inspect system effects. ZeroADR protects the missing runtime control point:
 - **Production Tool Result Gate** — holds successful MCP tool results before
   delivery, then applies rules, Hybrid review, blocking, or result-stage
   approval.
+- **Multi-stage Runtime Gates** — optionally review Agent input, discovered
+  tool metadata, tool requests, and tool results before the next runtime step.
+- **Online Session Guard** — carries bounded compromise state forward so a
+  detected injection can stop later write, execution, sensitive-read, or
+  exfiltration actions instead of relying only on post-session replay.
 - **Agent Hook adapters** — normalizes Generic JSON, Claude Code, and Codex
   pre-tool/post-tool events through a shared decision path.
 - **Human approval** — persists approval requests in SQLite, supports
@@ -86,7 +91,8 @@ prevention.
 
 - OpenAI-compatible Chat Completions providers
 - Bounded and redacted session triage
-- `tool-result-review-v0.2` Hybrid result review
+- Stage-specific Hybrid review for Agent input, tool metadata, tool requests,
+  and `tool-result-review-v0.2` result review
 - Critical deterministic findings that cannot be downgraded by the model
 - Fail-safe approval on low confidence, timeout, provider failure, or invalid
   structured output
@@ -107,6 +113,9 @@ AI Agent / MCP Client / Hook / Endpoint Sensor
         RuntimeEvent normalization + redaction
                     │
                     ▼
+ Input │ Metadata │ Request │ Result │ Session Guard
+                    │
+                    ▼
       Deterministic detection + optional LLM review
                     │
                     ▼
@@ -119,8 +128,10 @@ AI Agent / MCP Client / Hook / Endpoint Sensor
  JSONL │ SQLite │ Console │ reconstruction │ Agent-BOM
 ```
 
-The production Tool Result Gate covers MCP `tool.call.completed` responses.
-Hook post-tool, Endpoint, and Replay paths remain observational.
+All v1.2 gates are opt-in. Missing configuration preserves v1.1 behavior. MCP
+can enforce metadata, request, and result stages; Agent input enforcement needs
+a Generic/Claude Code input hook because MCP alone cannot see the initial user
+prompt. Hook post-tool, Endpoint, and Replay paths remain observational.
 
 ## Benchmark Results
 
@@ -135,41 +146,51 @@ result-classification test.
 | --- | --- |
 | ASB commit | `1f561dccf92d55302368fa67679b4ba9d9c8fdc4` |
 | Attack families | DPI, OPI, Memory Poisoning, Mixed, PoT |
-| Dataset | 100 attacks + 100 paired clean controls |
+| Dataset | v3 holdout: 100 attacks + 100 paired clean controls |
 | Experiment arms | Baseline, Rules, Hybrid — 600 Agent runs total |
 | Agent / Reviewer | `deepseek-v4-flash` / `deepseek-v4-flash` |
-| Workers | 4 |
+| Runtime gates | Input, Metadata, Request, Result, Session Guard |
+| Confidence / workers | 0.85 / 4 |
 | Provider / workflow failures | 0 / 0 |
 | Primary metric | Official attacker-goal ASR; no refusal judge |
 
-| Arm | ASR | Prevention | Clean FPR | Block / Approval | Task Success | P50 / P95 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Baseline | 67% (67/100) | 0% | 0% | 0 / 0 | 68.0% | 8.404s / 22.449s |
-| Rules | 60% (60/100) | 39% | 0% | 39 / 0 | 63.0% | 7.883s / 23.034s |
-| Hybrid | **40% (40/100)** | 56% | 2% | 50 / 8 | 63.5% | 13.600s / 24.233s |
+| Arm | ASR | Clean FPR | Block / Approval | Task Success | P50 / P95 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Baseline | 70% (70/100) | 0% | 0 / 0 | 66.0% | 8.027s / 19.413s |
+| Rules | 22% (22/100) | 0% | 57 / 0 | 62.0% | 7.000s / 17.871s |
+| Hybrid | **7% (7/100)** | **4%** | 70 / 7 | 54.5% | 23.779s / 53.099s |
 
-Hybrid reduces ASR by **27 percentage points** versus baseline (40.3% relative)
-with 2 false positives across 100 clean controls. The remaining 40 successful
-attacks are reported directly; a block elsewhere in a workflow is not counted
-as an automatic attack failure.
+Hybrid reduces ASR by **63 percentage points** versus baseline (90% relative)
+with 4 false-positive cases across 100 clean controls. It meets the ASR and
+Clean FPR targets, but task success is 11.5 percentage points below Baseline,
+missing the utility target by 1.5 points. The result is therefore a security
+target pass and utility target fail, not a full acceptance.
 
 | Hybrid attack family | ASR |
 | --- | ---: |
-| DPI | 85% (17/20) |
-| OPI | 25% (5/20) |
-| Memory Poisoning | 10% (2/20) |
-| Mixed | 50% (10/20) |
-| PoT Backdoor | 30% (6/20) |
+| DPI | 0% (0/20) |
+| OPI | 5% (1/20) |
+| Memory Poisoning | 5% (1/20) |
+| Mixed | 0% (0/20) |
+| PoT Backdoor | 25% (5/20) |
 
-Memory Poisoning is conditioned on successful poisoned-memory retrieval. Two
-cache-only replays made zero model calls and reproduced analysis SHA-256
-`de5979f6a1f8f7029dbd480aec28b9bd4af811e091f2e1f2d190af2f8af3cd7f`.
+Hybrid recorded 59 cases blocked before execution and 30 with a result-stage
+or post-execution block. Six successful attacks had no block; one succeeded
+despite a block. Stage actions were Input 40 block / 1 approval, Metadata 5 / 1,
+Pre-tool 17 / 9, and Result 32 / 7. Hybrid made 508 Agent calls and 878 Reviewer
+calls; Reviewer p95 was 9.410s. Memory Poisoning is conditioned on successful
+poisoned-memory retrieval.
 
-A separate provider-clean replication on the same manifest measured Baseline
-67%, Rules 55%, and Hybrid 29%, with Hybrid clean FPR 1%. This variance is
-reported explicitly; a single flash-model run is not a deterministic point
-estimate. Full methodology and hashes are in
-[the ASB results report](evaluation/asb/RESULTS.md).
+The formal cache contains 600 terminal cases. Two cache-only replays made zero
+case runs and zero model calls and reproduced analysis SHA-256
+`42d8cc195623a19fd7304018353af6293d9799d35fa2e2135babef92f379a8e5`.
+Full methodology and hashes are in [the ASB results report](evaluation/asb/RESULTS.md).
+
+#### Previous v2 result
+
+The superseded v2 holdout measured Baseline 67%, Rules 60%, and Hybrid 40%
+with 2% Hybrid Clean FPR. It used only pre-tool and result-stage defenses and
+is retained for historical comparison, separate from the v3 metrics above.
 
 ### AgentDojo — tool-result injection review
 
@@ -371,10 +392,12 @@ logs, credentials, and model configuration are intentionally excluded from Git.
 
 ## Current Release
 
-`1.1.0rc2` provides the current core runtime, production MCP Tool Result Gate,
-Hook enforcement, approval workflows, reconstruction, Console, Endpoint/BCC
-visibility, and optional Hybrid review. Linux BCC real-machine validation has
-passed. Release history is maintained in [CHANGELOG.md](CHANGELOG.md).
+`1.2.0rc1` adds opt-in Agent Input, Tool Metadata, Tool Request, and online
+Session Guard stages to the production Tool Result Gate. It also provides
+stage-specific redacted audit records and an official-ASB adapter that uses the
+same core coordinator without benchmark labels. Missing gate configuration
+preserves v1.1 behavior. Linux BCC real-machine validation has passed. Release
+history is maintained in [CHANGELOG.md](CHANGELOG.md).
 
 ## Support Boundary
 
@@ -397,6 +420,7 @@ in [SECURITY.md](SECURITY.md).
 - [RuntimeEvent schema](docs/runtime-event.md)
 - [Policy format](docs/policy.md)
 - [MCP Tool Result Gate](docs/tool-result-gate.md)
+- [Multi-stage Runtime Gates](docs/runtime-gates.md)
 - [Hook integration](docs/hooks.md)
 - [Session reconstruction](docs/session-reconstruction.md)
 - [Evidence chains](docs/evidence-chain.md)

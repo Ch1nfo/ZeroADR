@@ -9,6 +9,7 @@ from zeroadr.core.events import RuntimeEvent
 from zeroadr.core.findings import Finding
 from zeroadr.core.policies import PolicyDecision
 from zeroadr.core.tool_result_gate import ToolResultGateRecord
+from zeroadr.core.runtime_gate import RuntimeGateRecord
 from zeroadr.llm.models import LLMAdjudication, LLMAnalysis
 
 
@@ -73,6 +74,15 @@ class SQLiteStore:
             conn.execute(
                 "create index if not exists idx_tool_result_gate_session_created "
                 "on tool_result_gate_records(session_id, created_at, gate_record_id)"
+            )
+            conn.execute(
+                "create table if not exists runtime_gate_records "
+                "(gate_record_id text primary key, session_id text not null, event_id text not null, "
+                "created_at text not null, record_json text not null)"
+            )
+            conn.execute(
+                "create index if not exists idx_runtime_gate_session_created "
+                "on runtime_gate_records(session_id, created_at, gate_record_id)"
             )
 
     def save_event(self, event: RuntimeEvent) -> None:
@@ -174,6 +184,37 @@ class SQLiteStore:
                 "select record_json from tool_result_gate_records order by created_at, gate_record_id"
             )
             return [ToolResultGateRecord.model_validate_json(row[0]) for row in rows]
+
+    def save_runtime_gate_record(self, record: RuntimeGateRecord) -> None:
+        with self._connect() as conn:
+            conn.execute("insert or ignore into sessions(session_id) values (?)", (record.session_id,))
+            conn.execute(
+                "insert or replace into runtime_gate_records"
+                "(gate_record_id, session_id, event_id, created_at, record_json) values (?, ?, ?, ?, ?)",
+                (
+                    record.gate_record_id,
+                    record.session_id,
+                    record.event_id,
+                    record.created_at.isoformat(),
+                    record.model_dump_json(),
+                ),
+            )
+
+    def runtime_gate_records_for_session(self, session_id: str) -> list[RuntimeGateRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "select record_json from runtime_gate_records where session_id = ? "
+                "order by created_at, gate_record_id",
+                (session_id,),
+            )
+            return [RuntimeGateRecord.model_validate_json(row[0]) for row in rows]
+
+    def runtime_gate_records(self) -> list[RuntimeGateRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "select record_json from runtime_gate_records order by created_at, gate_record_id"
+            )
+            return [RuntimeGateRecord.model_validate_json(row[0]) for row in rows]
 
     def llm_adjudications_for_session(self, session_id: str) -> list[LLMAdjudication]:
         return self.llm_adjudications(session_id=session_id)

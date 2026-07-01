@@ -167,28 +167,35 @@ class PromptInjectionDetector:
     rule_id = "prompt-injection-tool-result"
 
     def detect(self, event: RuntimeEvent) -> list[Finding]:
-        if event.event_type != "tool.call.completed":
+        if event.event_type not in {"tool.call.completed", "agent.input.received"}:
             return []
-        text = extract_result_text(event.result)
+        is_input = event.event_type == "agent.input.received"
+        text = extract_result_text(event.arguments if is_input else event.result)
         if not text:
             return []
         match = classify_prompt_injection(text)
         if match is None:
             return []
         severity, phrase = match
-        capability = event.capability or "tool.result"
-        target = event.tool_name or "tool_result"
+        capability = event.capability or ("agent.input" if is_input else "tool.result")
+        target = event.tool_name or ("agent_input" if is_input else "tool_result")
+        rule_id = "prompt-injection-agent-input" if is_input else self.rule_id
+        title = "Prompt injection in agent input" if is_input else "Prompt injection in tool result"
         return [
             new_finding(
-                rule_id=self.rule_id,
-                title="Prompt injection in tool result",
+                rule_id=rule_id,
+                title=title,
                 severity=severity,
                 confidence=0.95 if severity == "critical" else 0.85,
                 session_id=event.session_id,
                 event_ids=[event.event_id],
                 capability=capability,
                 target=target,
-                explanation=f"Tool result contains prompt injection phrase: {phrase}",
+                explanation=(
+                    f"Agent input contains prompt injection phrase: {phrase}"
+                    if is_input
+                    else f"Tool result contains prompt injection phrase: {phrase}"
+                ),
             )
         ]
 

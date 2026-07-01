@@ -13,6 +13,7 @@ from zeroadr.api.console import ConsoleAsset, ConsoleAssetNotFound, get_console_
 from zeroadr.api.llm_settings import build_llm_config_view, test_llm_config, update_llm_config
 from zeroadr.api.readonly import API_VERSION, build_api_index, build_api_session
 from zeroadr.api.tool_result_gate import build_tool_result_gate_metrics, build_tool_result_gates
+from zeroadr.api.runtime_gate import build_runtime_gate_metrics, build_runtime_gates
 from zeroadr.llm.config import DEFAULT_LLM_CONFIG_PATH, LLMConfigurationError
 from zeroadr.llm.calibration import build_gate_metrics
 from zeroadr.llm.provider import LLMProviderError
@@ -106,6 +107,9 @@ class ReadOnlyApiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/v0/tool-result-gate/metrics":
                 self._write_json(200, build_tool_result_gate_metrics(self.server.db_path))
+                return
+            if parsed.path == "/api/v0/runtime-gates/metrics":
+                self._write_json(200, build_runtime_gate_metrics(self.server.db_path))
                 return
             if parsed.path == "/api/v0/approvals":
                 payload = build_approvals_index(
@@ -206,6 +210,9 @@ class ReadOnlyApiHandler(BaseHTTPRequestHandler):
                     return
                 if subresource == "tool-result-gates":
                     self._write_json(200, build_tool_result_gates(self.server.db_path, session_id))
+                    return
+                if subresource == "runtime-gates":
+                    self._write_json(200, build_runtime_gates(self.server.db_path, session_id))
                     return
                 if subresource is not None:
                     self._write_error(404, "not_found", "Route not found.")
