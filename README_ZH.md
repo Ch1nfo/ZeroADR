@@ -196,6 +196,67 @@ Output 和本地测试均不进入核心源码发布。
 安全问题请按照 [SECURITY.md](SECURITY.md) 通过 GitHub Private Security Advisory
 报告。
 
+## 安全测试集表现
+
+以下是评测 Companion 归档前保留的最后一次冻结结果。核心瘦身后未重新运行模型
+评测，因此这些数据描述最近一次实际测量的配置，不代表当前所有部署环境的保证。
+
+### Agent Security Bench（ASB v4）
+
+官方 Agent Harness 对 100 个 Attack Case 和 100 个 Paired Clean Case 分别运行
+Baseline、Rules 和 Hybrid 三组，总计 600 次运行。
+
+| Arm | ASR | Clean FPR | 任务成功率 | Clean 成功率 |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline | 66% | 0% | 62.5% | 90% |
+| Rules | 23% | 0% | 58.0% | 77% |
+| Hybrid | 8% | 6% | 59.5% | 84% |
+
+Hybrid 分攻击类型表现：
+
+| 攻击类型 | ASR | Clean FPR | 任务成功率 | Clean 成功率 |
+| --- | ---: | ---: | ---: | ---: |
+| DPI | 0% | 0% | 45.0% | 90% |
+| OPI | 0% | 5% | 37.5% | 70% |
+| Memory Poisoning | 5% | 0% | 82.5% | 80% |
+| Mixed | 0% | 0% | 45.0% | 90% |
+| PoT | 35% | 25% | 87.5% | 90% |
+
+Hybrid 相比 Baseline 将 ASR 降低 58 个百分点，整体任务成功率下降 3 个百分点。
+ASR 和整体效用门槛通过，但 Clean FPR 为 6%，超过 5% 门槛；Clean 成功率下降
+6 个百分点，超过 5 个百分点门槛。Provider Failure 和 Workflow Failure 均为 0，
+最终结果未通过完整发布门槛。
+
+冻结信息：
+
+- Manifest SHA-256：`47fbdf204b6491262f964034fb24db861fcbad9f2566ce32961b8af432cf0b6a`
+- Policy SHA-256：`ca07e47a66032ea88874b4493a286d03b9a48ffd2a4a60fec92f5dbd40b070e1`
+- Analysis SHA-256：`ddf3bc778fcac70002400394a26dc2483c4d127559a9f23972c0c19b8d996290`
+- 两次 Cache-only Replay 均复现结果，且 `new_case_runs=0`、`new_model_calls=0`。
+
+### AgentDojo v1.2.2
+
+固定 `workspace/tool_knowledge` Corpus 包含 966 个 Injected Case 和 966 个 Paired
+Clean Case，总计 1,932 个 Case。
+
+| Metric | Isolated Result | Sequence Prevention |
+| --- | ---: | ---: |
+| True Positive | 742 | 966 |
+| False Negative | 224 | 0 |
+| True Negative | 966 | 966 |
+| False Positive | 0 | 0 |
+| Recall | 76.81% | 100% |
+| Accuracy | 88.41% | 100% |
+| Precision | 100% | 100% |
+| F1 | 86.88% | 100% |
+| False-positive Rate | 0% | 0% |
+
+确定性 Rules Baseline 的 Recall 为 62.01%，Accuracy 为 81.00%，False Positive 为
+0。Isolated Review 检出 742 个攻击并漏检 224 个。Sequence Prevention 将这些在
+此前 Block 后不会继续执行的 224 个下游 Case 计入链路防护，因此 Sequence
+Prevention 100% 不等于 Isolated Classification 100%。固定 Cache Replay 完全复现
+Confusion Matrix，Provider Failure 为 0，且 `model_calls=0`。
+
 ## 最新验证结果
 
 2026-07-07 使用 Conda `agent` 环境完成的最新本地核心验证结果：

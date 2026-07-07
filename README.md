@@ -200,6 +200,72 @@ core source release.
 Report security issues through GitHub Private Security Advisory as described in
 [SECURITY.md](SECURITY.md).
 
+## Security benchmark results
+
+These are the last frozen results retained before the evaluation companions were
+archived. Model benchmarks were not rerun after the core slimming, so the results
+describe the latest measured configurations rather than guaranteeing performance for
+every current deployment.
+
+### Agent Security Bench (ASB v4)
+
+The official Agent Harness ran 100 attacks and 100 paired clean cases across
+Baseline, Rules, and Hybrid arms, for 600 runs in total.
+
+| Arm | ASR | Clean FPR | Task success | Clean success |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline | 66% | 0% | 62.5% | 90% |
+| Rules | 23% | 0% | 58.0% | 77% |
+| Hybrid | 8% | 6% | 59.5% | 84% |
+
+Hybrid results by attack family:
+
+| Attack family | ASR | Clean FPR | Task success | Clean success |
+| --- | ---: | ---: | ---: | ---: |
+| DPI | 0% | 0% | 45.0% | 90% |
+| OPI | 0% | 5% | 37.5% | 70% |
+| Memory Poisoning | 5% | 0% | 82.5% | 80% |
+| Mixed | 0% | 0% | 45.0% | 90% |
+| PoT | 35% | 25% | 87.5% | 90% |
+
+Hybrid reduced ASR by 58 percentage points and reduced aggregate task success by
+3 points relative to Baseline. It passed the ASR and aggregate utility targets, but
+Clean FPR exceeded its 5% limit and Clean success declined by 6 points, exceeding the
+5-point limit. Provider and workflow failures were both zero, so the result did not
+meet the complete release gate.
+
+Frozen evidence:
+
+- Manifest SHA-256: `47fbdf204b6491262f964034fb24db861fcbad9f2566ce32961b8af432cf0b6a`
+- Policy SHA-256: `ca07e47a66032ea88874b4493a286d03b9a48ffd2a4a60fec92f5dbd40b070e1`
+- Analysis SHA-256: `ddf3bc778fcac70002400394a26dc2483c4d127559a9f23972c0c19b8d996290`
+- Two cache-only replays reproduced the result with `new_case_runs=0` and
+  `new_model_calls=0`.
+
+### AgentDojo v1.2.2
+
+The fixed `workspace/tool_knowledge` corpus contains 966 injected and 966 paired clean
+cases, for 1,932 cases in total.
+
+| Metric | Isolated result | Sequence prevention |
+| --- | ---: | ---: |
+| True positive | 742 | 966 |
+| False negative | 224 | 0 |
+| True negative | 966 | 966 |
+| False positive | 0 | 0 |
+| Recall | 76.81% | 100% |
+| Accuracy | 88.41% | 100% |
+| Precision | 100% | 100% |
+| F1 | 86.88% | 100% |
+| False-positive rate | 0% | 0% |
+
+The deterministic Rules baseline reached 62.01% recall and 81.00% accuracy with no
+false positives. Isolated review detected 742 attacks and missed 224. Sequence
+prevention recovered those 224 downstream cases because they would not execute after
+an earlier block. Therefore, 100% sequence prevention is not a claim of 100% isolated
+classification. The frozen cache replay reproduced the confusion matrices with zero
+provider failures and `model_calls=0`.
+
 ## Latest validation
 
 Latest local core validation on 2026-07-07, using the Conda `agent` environment:
