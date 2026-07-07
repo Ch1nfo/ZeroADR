@@ -5,12 +5,6 @@ agent_input_gate:
   min_confidence: 0.85
   true_positive_action: block
   false_positive_action: allow
-tool_metadata_gate:
-  mode: shadow
-  review: rules
-  min_confidence: 0.85
-  true_positive_action: block
-  false_positive_action: allow
 tool_request_gate:
   mode: shadow
   review: rules

@@ -1,57 +1,49 @@
-# Multi-stage Runtime Gates
+# Runtime Security Gates
 
-ZeroADR 1.2 adds four opt-in stages around the existing MCP Tool Result Gate:
-Agent input, tool metadata, tool request, and an online session guard. If a
-section is absent from policy, that stage is disabled and v1.1 behavior is
-preserved.
+ZeroADR supports three opt-in runtime review points plus an online Session Guard:
+
+- `agent_input_gate`: inspect agent-visible input before execution.
+- `tool_request_gate`: inspect risky or unknown tool requests before execution.
+- `tool_result_gate`: inspect tool output before delivery to the agent.
+- `session_guard`: restrict risky actions after trusted injection evidence.
+
+All gates are disabled when absent. A policy with no gate configuration retains the
+v1.1 audit behavior.
 
 ```yaml
 agent_input_gate:
-  mode: shadow
-  review: rules
-  min_confidence: 0.85
-  true_positive_action: block
-  false_positive_action: allow
-
-tool_metadata_gate:
-  mode: shadow
-  review: rules
+  mode: enforce
+  review: hybrid
   min_confidence: 0.85
   true_positive_action: block
   false_positive_action: allow
 
 tool_request_gate:
-  mode: shadow
-  review: rules
+  mode: enforce
+  review: hybrid
+  min_confidence: 0.85
+  true_positive_action: block
+  false_positive_action: allow
+
+tool_result_gate:
+  mode: enforce
+  review: hybrid
   min_confidence: 0.85
   true_positive_action: block
   false_positive_action: allow
 
 session_guard:
-  mode: shadow
+  mode: enforce
   compromised_action: require_approval
 ```
 
-Use `policies/runtime-gates-shadow.yaml` first. After inspecting gate metrics,
-provider failures, false positives, and approval load, explicitly switch the
-required stages to `enforce`.
+`rules` uses deterministic findings only. `hybrid` uses the same findings plus the
+configured Reviewer. Invalid output, unknown evidence references after one correction
+retry, Provider errors, low confidence, and uncertain verdicts fail safe to approval.
 
-Agent input requires a Generic `agent_input` hook or Claude Code
-`UserPromptSubmit`. An MCP-only gateway cannot see the initial user prompt.
-Metadata enforcement filters only blocked entries from `tools/list`; allowed
-schemas are returned byte-for-byte at the object level. Request review is
-risk-triggered. Session state is bounded to 256 summaries, expires after one
-hour idle, and is removed on session shutdown.
+Input and Request share a bounded, redacted Stage Reviewer. Tool Result uses its own
+bounded Reviewer and cache. Audit records contain hashes, safe error codes, verdicts,
+confidence, actions, latency, and execution/delivery state; raw secrets are not stored.
 
-Critical deterministic findings cannot be downgraded by a reviewer. Low
-confidence, invalid output, unknown evidence references, timeouts, and provider
-failures map to approval in enforce mode. ASB evaluation treats approval as a
-block; production integrations retain human approval behavior.
-
-The runtime-gate APIs are:
-
-- `GET /api/v0/runtime-gates/metrics`
-- `GET /api/v0/sessions/{session_id}/runtime-gates`
-
-Only structured redacted records are persisted. Raw prompts, raw tool results,
-provider bodies, API keys, and Authorization headers are excluded.
+`tool_metadata_gate` is no longer supported. Policies containing it are rejected with
+an explicit configuration error.

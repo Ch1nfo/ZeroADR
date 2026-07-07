@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import OrderedDict, deque
+from collections import deque
 from dataclasses import dataclass, field
 import hashlib
 import time
@@ -19,7 +19,6 @@ _COMPROMISE_RULES = {
     "prompt-injection-agent-input",
     "prompt-injection-tool-result",
     "memory-poisoning-tool-result",
-    "tool-metadata-backdoor",
 }
 _RISKY_CAPABILITIES = {
     "filesystem.write",
@@ -38,7 +37,6 @@ class SessionSecurityState:
     event_ids: deque[str] = field(default_factory=lambda: deque(maxlen=256))
     last_seen: float = field(default_factory=time.monotonic)
     input_preview: str | None = None
-    tool_metadata: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +74,6 @@ class RuntimeSecurityCoordinator:
         self.reviewer = reviewer
         self.clock = clock
         self._sessions: dict[str, SessionSecurityState] = {}
-        self._metadata_cache: OrderedDict[str, tuple[str, float, int]] = OrderedDict()
 
     def session_state(self, session_id: str) -> SessionSecurityState:
         self._expire()
@@ -100,15 +97,6 @@ class RuntimeSecurityCoordinator:
         if isinstance(content, str):
             self.session_state(event.session_id).input_preview = content[:4096]
         return self._review(event, "agent_input", self.policy_engine.agent_input_gate)
-
-    def review_tool_metadata(self, event: RuntimeEvent) -> RuntimeGateDecision:
-        if event.tool_name and isinstance(event.arguments, dict):
-            self.session_state(event.session_id).tool_metadata[event.tool_name] = {
-                str(key): value
-                for key, value in list(event.arguments.items())[:20]
-                if key in {"name", "description", "inputSchema", "parameters"}
-            }
-        return self._review(event, "tool_metadata", self.policy_engine.tool_metadata_gate)
 
     def review_tool_request(self, event: RuntimeEvent) -> RuntimeGateDecision:
         return self._review(event, "pre_tool", self.policy_engine.tool_request_gate)
@@ -168,6 +156,13 @@ class RuntimeSecurityCoordinator:
                 )
                 if confidence < gate.min_confidence or verdict == "uncertain":
                     proposed = "require_approval"
+                elif (
+                    stage == "pre_tool"
+                    and verdict == "likely_true_positive"
+                    and confidence == gate.min_confidence
+                    and not findings
+                ):
+                    proposed = "require_approval"
                 elif verdict == "likely_true_positive":
                     proposed = _normalize_gate_action(gate.true_positive_action)
                 else:
@@ -211,11 +206,6 @@ class RuntimeSecurityCoordinator:
                 if event.tool_name
                 else None
             ),
-            schema_sha256=(
-                _stable_hash(event.arguments)
-                if stage == "tool_metadata" and event.arguments is not None
-                else None
-            ),
             session_compromised=state.compromised,
             verdict=verdict,
             confidence=confidence,
@@ -236,7 +226,7 @@ class RuntimeSecurityCoordinator:
         findings: list[Finding],
         state: SessionSecurityState,
     ) -> bool:
-        if stage in {"agent_input", "tool_metadata"}:
+        if stage == "agent_input":
             return True
         if stage != "pre_tool":
             return False
@@ -257,13 +247,6 @@ class RuntimeSecurityCoordinator:
     ) -> tuple[str, float, int]:
         if self.reviewer is None:
             raise RuntimeError("stage reviewer is not configured")
-        cache_key: str | None = None
-        if stage == "tool_metadata":
-            cache_key = self._metadata_cache_key(event, gate)
-            cached = self._metadata_cache.get(cache_key)
-            if cached is not None:
-                self._metadata_cache.move_to_end(cache_key)
-                return cached
         result = self.reviewer.review(
             stage=stage,
             event=event,
@@ -272,30 +255,9 @@ class RuntimeSecurityCoordinator:
                 "session_compromised": self.session_state(event.session_id).compromised,
                 "prior_finding_ids": self.session_state(event.session_id).finding_ids,
                 "agent_input": self.session_state(event.session_id).input_preview,
-                "tool_metadata": (
-                    self.session_state(event.session_id).tool_metadata.get(event.tool_name or "")
-                ),
             },
         )
-        if cache_key is not None:
-            self._metadata_cache[cache_key] = result
-            self._metadata_cache.move_to_end(cache_key)
-            while len(self._metadata_cache) > 1024:
-                self._metadata_cache.popitem(last=False)
         return result
-
-    def _metadata_cache_key(self, event: RuntimeEvent, gate: SemanticGatePolicy) -> str:
-        import json
-
-        payload = {
-            "schema": event.arguments,
-            "model": getattr(self.reviewer, "model", "unconfigured"),
-            "prompt_version": getattr(self.reviewer, "prompt_version", "runtime-stage-v0.1"),
-            "gate": gate.model_dump(mode="json"),
-        }
-        return hashlib.sha256(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
 
     def _update_state(self, event: RuntimeEvent, findings: list[Finding]) -> None:
         state = self.session_state(event.session_id)
@@ -313,11 +275,3 @@ class RuntimeSecurityCoordinator:
 
 def _normalize_gate_action(action: PolicyAction) -> PolicyAction:
     return "allow" if action == "alert" else action
-
-
-def _stable_hash(value: object) -> str:
-    import json
-
-    return hashlib.sha256(
-        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()

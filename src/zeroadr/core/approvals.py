@@ -25,7 +25,7 @@ class ApprovalRequest(BaseModel):
     tool_name: str | None = None
     capability: str | None = None
     arguments: dict[str, Any] | None = None
-    stage: Literal["agent_input", "tool_metadata", "pre_tool", "tool_result"] = "pre_tool"
+    stage: Literal["agent_input", "pre_tool", "tool_result"] = "pre_tool"
     result_preview: Any | None = None
     evidence_preview: Any | None = None
     status: ApprovalStatus
@@ -47,7 +47,7 @@ def new_approval_request(
     tool_name: str | None,
     capability: str | None,
     arguments: dict[str, Any] | None,
-    stage: Literal["agent_input", "tool_metadata", "pre_tool", "tool_result"] = "pre_tool",
+    stage: Literal["agent_input", "pre_tool", "tool_result"] = "pre_tool",
     result_preview: Any | None = None,
     evidence_preview: Any | None = None,
 ) -> ApprovalRequest:

@@ -55,6 +55,9 @@ pip-wheel-metadata/
 # Tests are local-only by project policy, including companion tests_local/
 tests_local/
 
+# Evaluation companions are archived locally and excluded from the core release
+/evaluation/
+
 # ZeroADR private runtime, LLM, approval, Endpoint, and evaluation state
 .zeroadr/
 

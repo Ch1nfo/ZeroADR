@@ -10,7 +10,6 @@ from zeroadr.core.ids import new_ulid
 EventType = Literal[
     "session.start",
     "agent.input.received",
-    "tool.metadata.discovered",
     "tool.call.requested",
     "tool.call.completed",
     "tool.call.failed",

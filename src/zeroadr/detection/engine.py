@@ -10,7 +10,6 @@ from zeroadr.detection.memory_poisoning import MemoryPoisoningDetector
 from zeroadr.detection.prompt_injection import PromptInjectionDetector
 from zeroadr.detection.secret_leakage import SecretLeakageDetector
 from zeroadr.detection.sensitive_file import SensitiveFileDetector
-from zeroadr.detection.tool_metadata import ToolMetadataDetector
 
 
 class Detector(Protocol):
@@ -26,7 +25,6 @@ class DetectionEngine:
             MemoryPoisoningDetector(),
             PrivilegeEscalationDetector(),
             SecretLeakageDetector(),
-            ToolMetadataDetector(),
         ]
 
     def detect(self, event: RuntimeEvent) -> list[Finding]:

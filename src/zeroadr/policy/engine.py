@@ -57,7 +57,6 @@ class PolicyEngine:
         policies: list[dict[str, Any]] | None = None,
         tool_result_gate: ToolResultGatePolicy | None = None,
         agent_input_gate: SemanticGatePolicy | None = None,
-        tool_metadata_gate: SemanticGatePolicy | None = None,
         tool_request_gate: SemanticGatePolicy | None = None,
         session_guard: SessionGuardPolicy | None = None,
     ) -> None:
@@ -65,12 +64,13 @@ class PolicyEngine:
         self.policies = policies or []
         self.tool_result_gate = tool_result_gate
         self.agent_input_gate = agent_input_gate
-        self.tool_metadata_gate = tool_metadata_gate
         self.tool_request_gate = tool_request_gate
         self.session_guard = session_guard
 
     @classmethod
     def from_dict(cls, config: dict[str, Any]) -> "PolicyEngine":
+        if "tool_metadata_gate" in config:
+            raise ValueError("tool_metadata_gate is no longer supported")
         gate_config = config.get("tool_result_gate")
         gate = (
             ToolResultGatePolicy.model_validate(gate_config)
@@ -87,7 +87,6 @@ class PolicyEngine:
             policies=list(config.get("policies", [])),
             tool_result_gate=gate,
             agent_input_gate=semantic("agent_input_gate"),
-            tool_metadata_gate=semantic("tool_metadata_gate"),
             tool_request_gate=semantic("tool_request_gate"),
             session_guard=(
                 SessionGuardPolicy.model_validate(guard_config)
@@ -157,7 +156,6 @@ class PolicyEngine:
             gate is not None and gate.review == "hybrid"
             for gate in (
                 self.agent_input_gate,
-                self.tool_metadata_gate,
                 self.tool_request_gate,
             )
         )

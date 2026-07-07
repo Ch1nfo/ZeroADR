@@ -1,29 +1,24 @@
 # Changelog
 
-## [1.2.0rc1] - 2026-06-30
+## [1.2.0rc1] - 2026-07-01
+
+### Changed
+
+- Limited the stable runtime enforcement surface to Agent Input, Tool Request,
+  Tool Result, and Session Guard.
+- Fixed Stage Review to one bounded Input Prompt and one bounded Request Prompt.
+- Kept Provider output correction, health tracking, redaction, audit persistence,
+  and fail-safe approval as runtime reliability behavior.
+- Removed evaluation companions and experimental tuning workflows from the core
+  source release.
 
 ### Added
 
-- Opt-in Agent Input, Tool Metadata, Tool Request, and online Session Guard
+- Opt-in Agent Input, Tool Request, and online Session Guard
   stages coordinated by one core `RuntimeSecurityCoordinator`.
 - Stage-specific bounded and redacted Hybrid reviews, structured runtime gate
-  audit records, SQLite persistence, metrics/session APIs, and ASB step
-  journals.
-- MCP `tools/list` schema inspection and filtering, real capability mapping,
-  bounded session compromise state, and deterministic metadata review caching.
-- Official ASB v1.2 adapter support for multi-stage gates without exposing
-  attack labels, attacker tools, or attacker-goal outcomes to the defense.
-
-### Evaluation
-
-- Official ASB v3 holdout: Baseline 70% ASR, Rules 22%, Hybrid 7%; Hybrid
-  Clean FPR 4%, with zero final Provider and workflow failures.
-- Hybrid task success is 54.5% versus Baseline 66.0%. The 11.5-point decline
-  misses the release utility target by 1.5 points, so readiness remains
-  explicitly incomplete despite passing the security targets.
-- Two cache-only replays made zero case runs and zero model calls and reproduced
-  analysis SHA-256
-  `42d8cc195623a19fd7304018353af6293d9799d35fa2e2135babef92f379a8e5`.
+  audit records, SQLite persistence, and metrics/session APIs.
+- Real capability mapping and bounded session compromise state.
 
 ### Compatibility
 

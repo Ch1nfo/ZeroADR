@@ -484,7 +484,7 @@ function renderLlmConfig(config) {
   elements.llmModel.value = saved.model || "";
   elements.llmApiKey.value = "";
   elements.llmLanguage.value = saved.language || "zh";
-  elements.llmTimeout.value = saved.timeout || 30;
+  elements.llmTimeout.value = saved.timeout || 5;
   elements.llmMaxOutputTokens.value = saved.max_output_tokens || 1200;
   elements.llmGateModel.value = saved.gate_model || "";
   elements.llmGateTimeout.value = saved.gate_timeout || 8;

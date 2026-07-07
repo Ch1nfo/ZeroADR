@@ -16,7 +16,7 @@ from zeroadr.llm.models import AnalysisLanguage
 DEFAULT_LLM_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_LLM_CONFIG_PATH = Path(".zeroadr/llm-config.json")
 DEFAULT_LLM_LANGUAGE: AnalysisLanguage = "zh"
-DEFAULT_LLM_TIMEOUT = 30.0
+DEFAULT_LLM_TIMEOUT = 5.0
 DEFAULT_LLM_MAX_OUTPUT_TOKENS = 1200
 DEFAULT_LLM_GATE_TIMEOUT = 8.0
 DEFAULT_LLM_GATE_MAX_OUTPUT_TOKENS = 256

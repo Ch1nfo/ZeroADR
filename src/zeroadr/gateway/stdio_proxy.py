@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import copy
 import json
 import sys
 import time
@@ -100,7 +99,6 @@ class GatewayRuntime:
             adjudicator=adjudicator,
         )
         self.pending: dict[str | int, PendingCall] = {}
-        self.pending_metadata: set[str | int] = set()
         self.tool_result_reviewer = tool_result_reviewer
         self.security_coordinator = RuntimeSecurityCoordinator(
             policy_engine=self.policy_engine,
@@ -118,14 +116,6 @@ class GatewayRuntime:
         )
 
     def inspect_client_message(self, message: dict[str, Any]) -> ClientInspectionResult:
-        if message.get("method") == "tools/list":
-            request_id = message.get("id")
-            if (
-                isinstance(request_id, str | int)
-                and self.policy_engine.tool_metadata_gate is not None
-            ):
-                self.pending_metadata.add(request_id)
-            return ClientInspectionResult()
         if message.get("method") != "tools/call":
             return ClientInspectionResult()
         request_id = message.get("id")
@@ -219,9 +209,6 @@ class GatewayRuntime:
         request_id = message.get("id")
         if not isinstance(request_id, str | int):
             return ToolResultInspectionResult()
-        if request_id in self.pending_metadata:
-            self.pending_metadata.discard(request_id)
-            return self._inspect_tool_metadata(message)
         pending = self.pending.pop(request_id, None)
         if not pending:
             return ToolResultInspectionResult()
@@ -237,53 +224,6 @@ class GatewayRuntime:
             response_byte_count=response_byte_count,
             resource_limit_exceeded=resource_limit_exceeded,
         )
-
-    def _inspect_tool_metadata(self, message: dict[str, Any]) -> ToolResultInspectionResult:
-        gate = self.policy_engine.tool_metadata_gate
-        if gate is None:
-            return ToolResultInspectionResult()
-        result = message.get("result")
-        result_obj = result if isinstance(result, dict) else {}
-        tools = result_obj.get("tools")
-        if not isinstance(tools, list):
-            return ToolResultInspectionResult()
-        retained: list[Any] = []
-        changed = False
-        for item in tools:
-            if not isinstance(item, dict):
-                retained.append(item)
-                continue
-            name_value = item.get("name")
-            name = name_value if isinstance(name_value, str) else None
-            description_value = item.get("description")
-            description = description_value if isinstance(description_value, str) else None
-            mapping = map_capability(name, None, description)
-            event = new_event(
-                event_type="tool.metadata.discovered",
-                source_type="mcp_gateway",
-                session_id=self.session_id,
-                request_id=message.get("id"),
-                server_name=self.server_name,
-                tool_name=name,
-                capability=mapping.capability,
-                arguments=item,
-                raw={},
-            )
-            decision = self.security_coordinator.review_tool_metadata(event)
-            if gate.mode == "enforce" and decision.effective_action in {
-                "block",
-                "require_approval",
-            }:
-                changed = True
-                continue
-            retained.append(item)
-        if gate.mode == "shadow" or not changed:
-            return ToolResultInspectionResult()
-        rewritten = copy.deepcopy(message)
-        rewritten_result = rewritten.get("result")
-        if isinstance(rewritten_result, dict):
-            rewritten_result["tools"] = retained
-        return ToolResultInspectionResult(response_override=rewritten)
 
     def _server_event(self, message: dict[str, Any], pending: PendingCall) -> RuntimeEvent:
         request_id = pending.request_id

@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from zeroadr.core.ids import new_ulid
 from zeroadr.core.policies import PolicyAction
 
-GateStage = Literal["agent_input", "tool_metadata", "pre_tool", "tool_result"]
+GateStage = Literal["agent_input", "pre_tool", "tool_result"]
 GateMode = Literal["shadow", "enforce"]
 GateReview = Literal["rules", "hybrid"]
 
@@ -36,7 +36,6 @@ class RuntimeGateRecord(BaseModel):
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     capability: str | None = None
     target_sha256: str | None = None
-    schema_sha256: str | None = None
     executed: bool = False
     delivered: bool = False
     session_compromised: bool = False

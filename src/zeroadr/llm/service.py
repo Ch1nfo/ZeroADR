@@ -88,6 +88,7 @@ def analyze_session(
             error_message=safe_message,
         )
         store.save_llm_analysis(failed)
+        store.record_llm_provider_failure(exc.code)
         raise LLMTriageError(exc.code, safe_message, analysis=failed) from exc
     completed = LLMAnalysis(
         analysis_id=new_ulid(),
@@ -110,4 +111,5 @@ def analyze_session(
         error_message=None,
     )
     store.save_llm_analysis(completed)
+    store.record_llm_provider_success()
     return completed

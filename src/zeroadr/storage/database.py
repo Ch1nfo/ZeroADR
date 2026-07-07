@@ -84,6 +84,11 @@ class SQLiteStore:
                 "create index if not exists idx_runtime_gate_session_created "
                 "on runtime_gate_records(session_id, created_at, gate_record_id)"
             )
+            conn.execute(
+                "create table if not exists llm_provider_health "
+                "(provider_id text primary key, consecutive_failures integer not null, "
+                "last_error_code text, status text not null)"
+            )
 
     def save_event(self, event: RuntimeEvent) -> None:
         with self._connect() as conn:
@@ -133,6 +138,58 @@ class SQLiteStore:
                 (session_id,),
             )
             return [LLMAnalysis.model_validate_json(row[0]) for row in rows]
+
+    def record_llm_provider_failure(
+        self, error_code: str, *, provider_id: str = "openai-compatible"
+    ) -> dict[str, str | int | None]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "select consecutive_failures from llm_provider_health where provider_id = ?",
+                (provider_id,),
+            ).fetchone()
+            failures = (int(row[0]) if row else 0) + 1
+            status = "unhealthy" if failures >= 3 else "degraded"
+            conn.execute(
+                "insert or replace into llm_provider_health"
+                "(provider_id, consecutive_failures, last_error_code, status) values (?, ?, ?, ?)",
+                (provider_id, failures, error_code, status),
+            )
+        return {
+            "consecutive_failures": failures,
+            "last_error_code": error_code,
+            "status": status,
+        }
+
+    def record_llm_provider_success(
+        self, *, provider_id: str = "openai-compatible"
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "insert or replace into llm_provider_health"
+                "(provider_id, consecutive_failures, last_error_code, status) values (?, 0, null, 'healthy')",
+                (provider_id,),
+            )
+
+    def llm_provider_health(
+        self, *, provider_id: str = "openai-compatible"
+    ) -> dict[str, str | int | None]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "select consecutive_failures, last_error_code, status "
+                "from llm_provider_health where provider_id = ?",
+                (provider_id,),
+            ).fetchone()
+        if row is None:
+            return {
+                "consecutive_failures": 0,
+                "last_error_code": None,
+                "status": "unknown",
+            }
+        return {
+            "consecutive_failures": int(row[0]),
+            "last_error_code": row[1],
+            "status": str(row[2]),
+        }
 
     def save_llm_adjudication(self, adjudication: LLMAdjudication) -> None:
         with self._connect() as conn:

@@ -50,13 +50,15 @@ class OpenAICompatibleProvider:
         *,
         base_url: str,
         api_key: str,
-        timeout: float = 30.0,
+        timeout: float = 5.0,
+        total_deadline: float = 20.0,
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        self.total_deadline = total_deadline
         self.transport = transport
         self.sleep = sleep
 
@@ -155,12 +157,17 @@ class OpenAICompatibleProvider:
         )
 
     def _post_with_retries(self, request_body: dict[str, Any]) -> httpx.Response:
+        deadline = time.monotonic() + self.total_deadline
         with httpx.Client(
             timeout=self.timeout,
             transport=self.transport,
             verify=True,
         ) as client:
             for attempt in range(3):
+                if time.monotonic() >= deadline:
+                    raise LLMProviderError(
+                        "provider_timeout", "Provider request deadline exceeded."
+                    )
                 try:
                     response = client.post(
                         f"{self.base_url}/chat/completions",
